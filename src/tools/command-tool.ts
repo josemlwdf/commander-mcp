@@ -13,18 +13,7 @@ export function buildCommandToolDefinition(
   envInfo: EnvironmentInfo
 ) {
   const root = validator.getRoot();
-  const dynamicHint = buildDynamicAgentHint(root, envInfo);
-
-  const description = [
-    `Execute system commands strictly confined within the authorized project directory.`,
-    ``,
-    dynamicHint,
-    ``,
-    `IMPORTANT USAGE RULES:`,
-    `- All file paths must be relative to the authorized root or within it.`,
-    `- Any command referencing out-of-context paths (e.g. '../', '/etc', 'C:\\Windows', '~') will be rejected.`,
-    `- Use native shell syntax for ${envInfo.osName} (${envInfo.defaultShell}).`
-  ].join('\n');
+  const description = buildDynamicAgentHint(root, envInfo);
 
   return {
     name: 'execute_command',
@@ -34,32 +23,18 @@ export function buildCommandToolDefinition(
       properties: {
         command: {
           type: 'string',
-          description: `The system shell command to execute in ${envInfo.osName} (${envInfo.defaultShell}). Must not reference paths outside the workspace.`
+          description: 'Shell command to execute.'
         },
         subdir: {
           type: 'string',
-          description: `Optional relative path to a subdirectory inside '${root}' to run the command in.`
+          description: 'Optional relative subdirectory inside workspace.'
         },
         timeout_ms: {
           type: 'number',
-          description: 'Optional execution timeout in milliseconds. Default: 60000 (60 seconds).'
+          description: 'Optional timeout in milliseconds (default: 60000).'
         }
       },
       required: ['command']
-    }
-  };
-}
-
-export function buildContextToolDefinition(
-  validator: PathValidator,
-  envInfo: EnvironmentInfo
-) {
-  return {
-    name: 'get_workspace_context',
-    description: 'Inspect the authorized workspace root, OS details, default shell, and confinement rules.',
-    inputSchema: {
-      type: 'object',
-      properties: {}
     }
   };
 }
@@ -131,30 +106,6 @@ export async function handleExecuteCommand(
       {
         type: 'text',
         text: responseLines.join('\n')
-      }
-    ]
-  };
-}
-
-export function handleGetWorkspaceContext(
-  validator: PathValidator,
-  envInfo: EnvironmentInfo
-) {
-  const info = {
-    operatingSystem: envInfo.osName,
-    architecture: envInfo.architecture,
-    defaultShell: envInfo.defaultShell,
-    pathSeparator: envInfo.pathSeparator,
-    authorizedRoot: validator.getRoot(),
-    guidelines: envInfo.shellSyntaxTips
-  };
-
-  return {
-    isError: false,
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(info, null, 2)
       }
     ]
   };

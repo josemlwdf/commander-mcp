@@ -8,7 +8,7 @@ export interface EnvironmentInfo {
   defaultShell: string;
   shellArgs: string[];
   pathSeparator: string;
-  homeDir: string;
+  currentDir: string;
   isWindows: boolean;
   shellSyntaxTips: string[];
 }
@@ -17,7 +17,7 @@ export function detectEnvironment(overridePlatform?: NodeJS.Platform): Environme
   const platform = overridePlatform ?? process.platform;
   const isWindows = platform === 'win32';
   const architecture = os.arch();
-  const homeDir = os.homedir();
+  const currentDir = process.cwd();
 
   let osName = 'Linux';
   let defaultShell = '/bin/bash';
@@ -67,26 +67,13 @@ export function detectEnvironment(overridePlatform?: NodeJS.Platform): Environme
     defaultShell,
     shellArgs,
     pathSeparator: isWindows ? '\\' : '/',
-    homeDir,
+    currentDir,
     isWindows,
     shellSyntaxTips,
   };
 }
 
 export function buildDynamicAgentHint(allowedRoot: string, env: EnvironmentInfo): string {
-  return [
-    `=== RUNTIME OPERATING SYSTEM & WORKSPACE NOTICE ===`,
-    `Operating System: ${env.osName} (${env.architecture})`,
-    `Default Shell: ${env.defaultShell}`,
-    `Path Separator: '${env.pathSeparator}'`,
-    `Current Authorized Root: ${allowedRoot}`,
-    ``,
-    `=== AGENT CONSTRAINTS & SECURITY POLICY ===`,
-    `1. CONTEXT CONFINEMENT: You are ONLY authorized to access files and subdirectories inside: "${allowedRoot}".`,
-    `2. STRICT OUT-OF-CONTEXT BLOCK: Any command referencing paths outside this directory (e.g., parent traversals '../', absolute system paths, home directory '~' or '$HOME', or root drives) will be REJECTED AND BLOCKED.`,
-    `3. OS SYNTAX TIPS:`,
-    ...env.shellSyntaxTips.map(tip => `   - ${tip}`),
-    `====================================================`
-  ].join('\n');
+  return `Always use this when needs to execute shell commands. The current OS is ${env.osName}. The current SHELL is (${env.defaultShell}). Paths outside current workspace (e.g. '../', absolute system paths) should be blocked. Execute any command inside this project directory`;
 }
 

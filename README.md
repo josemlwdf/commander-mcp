@@ -26,18 +26,15 @@ A secure, context-confined Model Context Protocol (MCP) server that empowers AI 
 
 ---
 
-## Tools Exposed to the Agent
+## Tool Exposed to the Agent
 
-### 1. `execute_command`
+### `execute_command`
 Executes a system shell command strictly confined within the authorized project directory.
 
 - **Parameters**:
   - `command` *(string, required)*: The shell command to execute.
   - `subdir` *(string, optional)*: Relative subdirectory inside the workspace to execute the command in.
   - `timeout_ms` *(number, optional)*: Execution timeout in milliseconds (default: `60000`).
-
-### 2. `get_workspace_context`
-Returns current OS details, detected shell, path separator, authorized workspace root, and security guidelines.
 
 ---
 

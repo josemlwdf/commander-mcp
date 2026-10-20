@@ -25,33 +25,28 @@ test('MCP Server End-to-End', async (t) => {
 
   await client.connect(transport);
 
-  await t.test('lists tools with dynamic OS hints and description', async () => {
+  await t.test('lists only execute_command with reduced description', async () => {
     const toolsResult = await client.listTools();
-    assert.ok(toolsResult.tools.length >= 2);
+    assert.equal(toolsResult.tools.length, 1);
 
-    const execTool = toolsResult.tools.find((tool) => tool.name === 'execute_command');
-    assert.ok(execTool, 'execute_command tool must exist');
+    const execTool = toolsResult.tools[0];
+    assert.equal(execTool.name, 'execute_command');
 
-    // Verify dynamic description contains OS and Root hints
-    assert.ok(execTool.description?.includes('RUNTIME OPERATING SYSTEM & WORKSPACE NOTICE'));
-    assert.ok(execTool.description?.includes('Authorized Root'));
+    // Verify concise description contains Root and confinement hints without verbose boilerplate
     assert.ok(execTool.description?.includes(workspaceRoot));
-    assert.ok(execTool.description?.includes('CONTEXT CONFINEMENT'));
+    assert.ok(execTool.description?.includes('strictly confined'));
+    assert.ok(!execTool.description?.includes('RUNTIME OPERATING SYSTEM & WORKSPACE NOTICE'));
   });
 
-  await t.test('calls get_workspace_context successfully', async () => {
+  await t.test('rejects unknown tools such as get_workspace_context', async () => {
     const res = await client.callTool({
       name: 'get_workspace_context',
       arguments: {},
     });
 
-    assert.ok(!res.isError);
+    assert.equal(res.isError, true);
     const content = res.content as Array<{ type: string; text: string }>;
-    assert.ok(content.length > 0);
-    const parsed = JSON.parse(content[0].text);
-    assert.ok(parsed.operatingSystem);
-    assert.ok(parsed.authorizedRoot);
-    assert.equal(parsed.authorizedRoot, workspaceRoot);
+    assert.ok(content[0].text.includes('Unknown tool requested'));
   });
 
   await t.test('executes allowed in-context command', async () => {

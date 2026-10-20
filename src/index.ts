@@ -12,9 +12,7 @@ import { PathValidator } from './security/path-validator.js';
 import { ProcessRunner } from './executor/process-runner.js';
 import {
   buildCommandToolDefinition,
-  buildContextToolDefinition,
   handleExecuteCommand,
-  handleGetWorkspaceContext,
   ExecuteCommandArgs,
 } from './tools/command-tool.js';
 
@@ -92,10 +90,7 @@ async function main() {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
-      tools: [
-        buildCommandToolDefinition(validator, envInfo),
-        buildContextToolDefinition(validator, envInfo),
-      ],
+      tools: [buildCommandToolDefinition(validator, envInfo)],
     };
   });
 
@@ -105,10 +100,6 @@ async function main() {
     if (name === 'execute_command') {
       const args = (toolArgs || {}) as unknown as ExecuteCommandArgs;
       return await handleExecuteCommand(args, validator, runner);
-    }
-
-    if (name === 'get_workspace_context') {
-      return handleGetWorkspaceContext(validator, envInfo);
     }
 
     return {

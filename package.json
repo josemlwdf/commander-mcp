@@ -1,6 +1,6 @@
 {
   "name": "commander-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Secure, context-confined command execution MCP server for VS Code and Kiro",
   "main": "dist/index.js",
   "type": "module",
