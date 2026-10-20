@@ -1,4 +1,4 @@
-# Commander PCP 🛡️
+# Commander mcp 🛡️
 
 A secure, context-confined Model Context Protocol (MCP) server that empowers AI coding agents (in **VS Code**, **Kiro**, Cursor, Claude Desktop, etc.) to execute system commands strictly within the authorized project directory.
 
@@ -49,8 +49,8 @@ Returns current OS details, detected shell, path separator, authorized workspace
 ### Option A: Local Build
 Clone or place this repository on your machine:
 ```bash
-git clone <repo-url> commander_pcp
-cd commander_pcp
+git clone <repo-url> commander_mcp
+cd commander_mcp
 npm install
 npm run build
 ```
@@ -69,7 +69,7 @@ Add to your MCP settings file (`claude_desktop_config.json` or Cline's `settings
     "commander": {
       "command": "node",
       "args": [
-        "/path/to/commander_pcp/dist/index.js",
+        "/path/to/commander_mcp/dist/index.js",
         "--root",
         "${workspaceFolder}"
       ]
@@ -85,7 +85,7 @@ Add to your MCP settings file (`claude_desktop_config.json` or Cline's `settings
     "commander": {
       "command": "node",
       "args": [
-        "C:\\tools\\commander_pcp\\dist\\index.js",
+        "C:\\tools\\commander_mcp\\dist\\index.js",
         "--root",
         "${workspaceFolder}"
       ]
@@ -106,7 +106,7 @@ In Kiro's MCP configuration (`.kiro/mcp.json` or Settings > MCP):
     "commander": {
       "command": "node",
       "args": [
-        "/path/to/commander_pcp/dist/index.js",
+        "/path/to/commander_mcp/dist/index.js",
         "--root",
         "${workspaceFolder}"
       ]
@@ -119,17 +119,17 @@ In Kiro's MCP configuration (`.kiro/mcp.json` or Settings > MCP):
 
 ### 3. Global / Direct CLI Usage
 
-You can also run Commander PCP directly against any folder:
+You can also run Commander mcp directly against any folder:
 
 ```bash
 # Run confined to current directory:
-commander-pcp
+commander-mcp
 
 # Run confined to a specific project root:
-commander-pcp --root /home/user/my-app
+commander-mcp --root /home/user/my-app
 
 # Run with custom shell override:
-commander-pcp --root /home/user/my-app --shell /bin/bash
+commander-mcp --root /home/user/my-app --shell /bin/bash
 ```
 
 ---

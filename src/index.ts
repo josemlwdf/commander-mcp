@@ -37,10 +37,10 @@ function parseArgs(): { rootDir: string; shellOverride?: string } {
       }
     } else if (arg === '--help' || arg === '-h') {
       console.error(`
-Commander PCP - Secure Context-Confined Command Execution MCP Server
+Commander mcp - Secure Context-Confined Command Execution MCP Server
 
 Usage:
-  commander-pcp [options]
+  commander-mcp [options]
 
 Options:
   -r, --root <path>     Authorized workspace root directory (default: current working directory)
@@ -73,14 +73,14 @@ async function main() {
   const runner = new ProcessRunner(envInfo);
 
   // Note: logs go to stderr to prevent corrupting MCP stdio JSON-RPC protocol
-  console.error(`[commander-pcp] Starting server...`);
-  console.error(`[commander-pcp] OS: ${envInfo.osName} (${envInfo.architecture})`);
-  console.error(`[commander-pcp] Shell: ${envInfo.defaultShell}`);
-  console.error(`[commander-pcp] Authorized Root: ${validator.getRoot()}`);
+  console.error(`[commander-mcp] Starting server...`);
+  console.error(`[commander-mcp] OS: ${envInfo.osName} (${envInfo.architecture})`);
+  console.error(`[commander-mcp] Shell: ${envInfo.defaultShell}`);
+  console.error(`[commander-mcp] Authorized Root: ${validator.getRoot()}`);
 
   const server = new Server(
     {
-      name: 'commander-pcp',
+      name: 'commander-mcp',
       version: '1.0.0',
     },
     {
@@ -124,11 +124,11 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`[commander-pcp] Server connected via stdio transport. Ready for requests.`);
+  console.error(`[commander-mcp] Server connected via stdio transport. Ready for requests.`);
 }
 
 main().catch((err) => {
-  console.error(`[commander-pcp] Fatal startup error:`, err);
+  console.error(`[commander-mcp] Fatal startup error:`, err);
   process.exit(1);
 });
 

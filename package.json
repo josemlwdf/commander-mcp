@@ -1,11 +1,11 @@
 {
-  "name": "commander-pcp",
+  "name": "commander-mcp",
   "version": "1.0.0",
   "description": "Secure, context-confined command execution MCP server for VS Code and Kiro",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
-    "commander-pcp": "dist/index.js"
+    "commander-mcp": "dist/index.js"
   },
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
