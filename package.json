@@ -22,7 +22,15 @@
     "command-runner",
     "security"
   ],
-  "author": "",
+  "author": "josemlwdf",
+   "repository": {
+    "type": "git",
+    "url": "https://github.com/josemlwdf/commander-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/josemlwdf/commander-mcp/issues"
+  },
+  "homepage": "https://github.com/josemlwdf/commander-mcp#readme",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.0"
