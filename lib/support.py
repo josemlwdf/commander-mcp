@@ -24,10 +24,18 @@ def configure(root: str, shell: str | None = None) -> None:
     if shell: SHELL = shell
 
 def inside(path: str | Path, *, must_exist: bool = False) -> Path:
-    p = Path(path).expanduser()
-    p = (p if p.is_absolute() else ROOT / p).resolve(strict=must_exist)
-    try: p.relative_to(ROOT)
-    except ValueError: raise ValueError(f"Path escapes authorized workspace root: {path}")
+    raw = Path(path).expanduser()
+    candidate = raw if raw.is_absolute() else ROOT / raw
+    normalized = Path(os.path.normpath(str(candidate)))
+    try:
+        normalized.relative_to(ROOT)
+    except ValueError:
+        raise ValueError(f"Path escapes authorized workspace root: {path}")
+    p = normalized.resolve(strict=must_exist)
+    try:
+        p.relative_to(ROOT)
+    except ValueError:
+        raise ValueError(f"Path escapes authorized workspace root: {path}")
     return p
 
 def iter_workspace_files(
@@ -158,8 +166,10 @@ def run_process(command: str | list[str], *, cwd: str | Path = ROOT, timeout_ms:
     p.stderr.close()
     def decode(key): return bytes(captured[key]).decode("utf-8","replace")+("\n...[truncated]" if truncated[key] else "")
     stderr_text=decode("stderr")
+    timeout_reason = f"Process exceeded {timeout_ms}ms." if timed_out else None
     if timed_out: stderr_text+=f"\n[TIMEOUT] Process exceeded {timeout_ms}ms."
     return {"stdout":decode("stdout"), "stderr":stderr_text, "exit_code":124 if timed_out else code, "timed_out":timed_out,
+            "timeout_reason": timeout_reason,
             "duration_ms":round((time.monotonic()-start)*1000)}
 
 def validate_shell_command(command: str, cwd: Path) -> None:

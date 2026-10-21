@@ -11,15 +11,16 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import unquote, urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .. import support
 from ..support import inside, describe
 
 
 class Position(BaseModel):
-    line: int = Field(description="0-based source line containing the symbol position.")
-    character: int = Field(description="0-based character offset within the source line.")
+    model_config = ConfigDict(extra="forbid")
+    line: int = Field(ge=0, description="0-based source line containing the symbol position.")
+    character: int = Field(ge=0, description="0-based character offset within the source line.")
 
 
 def _reader(stream, messages: queue.Queue) -> None:
@@ -110,16 +111,11 @@ def _locations(result: object) -> list[dict]:
     return output
 
 
-def register(mcp):
-    @mcp.tool(description=describe(
-        "Look up a definition at a 0-based source position using HANDY_CODER_LSP_COMMAND (no shell). "
-        "When to use: Navigate to a symbol's definition."
-    ))
-    def lsp_symbol_lookup(
-        symbol_name: Annotated[str, Field(description="Name of the symbol to look up; used to label the response.")],
-        path: Annotated[str, Field(description="Workspace-relative path to the source file.")],
-        position: Annotated[Position, Field(description="0-based line and character position used to request the definition from the language server.")],
-    ) -> dict:
+def lsp_symbol_lookup(
+    symbol_name: Annotated[str, Field(description="Name of the symbol to look up; used to label the response.")],
+    path: Annotated[str, Field(description="Workspace-relative path to the source file.")],
+    position: Annotated[Position, Field(description="0-based line and character position used to request the definition from the language server.")],
+) -> dict:
         if not symbol_name.strip():
             raise ValueError("symbol_name cannot be empty")
         source = inside(path, must_exist=True)
@@ -178,3 +174,12 @@ def register(mcp):
                     process.wait()
             process.stdin.close()
             process.stdout.close()
+
+
+def register(mcp):
+    return mcp.tool(description=describe(
+        "Look up a definition at a 0-based source position using HANDY_CODER_LSP_COMMAND (no shell). "
+        "Requires HANDY_CODER_LSP_COMMAND set to a local language server command. "
+        "When to use: Navigate to a symbol's definition."
+    ))(lsp_symbol_lookup)
+

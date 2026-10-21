@@ -98,53 +98,54 @@ def _parse_pytest_output(stdout: str) -> dict | None:
         "warnings": int(pattern.group(4) or 0),
     }
 
+
+def run_tests(
+    test_framework: Annotated[
+        Literal["jest", "pytest", "vitest"] | None,
+        Field(description="Test framework to use; omit to detect Jest, Vitest, or pytest from the workspace."),
+    ] = None,
+    filter_path: Annotated[
+        str | None,
+        Field(description="Optional workspace-relative test file or target path. When supplied and points to test files, runs without requiring workspace-wide test discovery."),
+    ] = None,
+) -> dict:
+    root = inside(".")
+    framework = test_framework
+    if framework and framework not in ("jest", "pytest", "vitest"):
+        raise ValueError("test_framework must be jest, pytest, or vitest")
+    if not framework:
+        framework = _detect_framework(root)
+    if not framework:
+        return {
+            "supported": False,
+            "message": "No Jest, Vitest, or pytest setup detected.",
+        }
+    target = inside(filter_path) if filter_path else None
+    if target is None and not _has_test_setup(root, framework):
+        return {
+            "supported": False,
+            "message": (
+                f"No {framework} test setup detected in the workspace. "
+                "Provide filter_path to run a specific target, or add a recognized test configuration."
+            ),
+        }
+    if framework == "pytest":
+        cmd = ["pytest"] + ([str(target)] if target else [])
+    else:
+        cmd = ["npx", "--no-install", framework, "run"] + ([str(target)] if target else [])
+    result = run_process(cmd, cwd=root)
+    out = {"supported": True, "framework": framework, **result}
+    if framework == "pytest":
+        parsed = _parse_pytest_output(result.get("stdout", "") + result.get("stderr", ""))
+        if parsed:
+            out["parsed"] = parsed
+    return out
+
+
 def register(mcp):
-    @mcp.tool(description=describe(
+    return mcp.tool(description=describe(
         "Run configured Jest, Vitest, or pytest tests; unfiltered runs require recognized test setup. "
         "filter_path is workspace-confined; when it points to test files, discovery is skipped. "
         "Returns parsed summary counts when available. "
         "When to use: Execute project tests."
-    ))
-    def run_tests(
-        test_framework: Annotated[
-            Literal["jest", "pytest", "vitest"] | None,
-            Field(description="Test framework to use; omit to detect Jest, Vitest, or pytest from the workspace."),
-        ] = None,
-        filter_path: Annotated[
-            str | None,
-            Field(description="Optional workspace-relative test file or target path. When supplied and points to test files, runs without requiring workspace-wide test discovery."),
-        ] = None,
-    ) -> dict:
-        root = inside(".")
-        framework = test_framework
-        if framework and framework not in ("jest", "pytest", "vitest"):
-            raise ValueError("test_framework must be jest, pytest, or vitest")
-        if not framework:
-            framework = _detect_framework(root)
-        if not framework:
-            return {
-                "supported": False,
-                "message": "No Jest, Vitest, or pytest setup detected.",
-            }
-        target = inside(filter_path) if filter_path else None
-        # Allow targeted runs when the filter path itself looks like tests
-        filter_is_test = target is not None and _path_looks_like_test(target)
-        if target is None and not _has_test_setup(root, framework):
-            return {
-                "supported": False,
-                "message": (
-                    f"No {framework} test setup detected in the workspace. "
-                    "Provide filter_path to run a specific target, or add a recognized test configuration."
-                ),
-            }
-        if framework == "pytest":
-            cmd = ["pytest"] + ([str(target)] if target else [])
-        else:
-            cmd = ["npx", "--no-install", framework, "run"] + ([str(target)] if target else [])
-        result = run_process(cmd, cwd=root)
-        out = {"supported": True, "framework": framework, **result}
-        if framework == "pytest":
-            parsed = _parse_pytest_output(result.get("stdout", "") + result.get("stderr", ""))
-            if parsed:
-                out["parsed"] = parsed
-        return out
+    ))(run_tests)

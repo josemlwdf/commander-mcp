@@ -75,25 +75,20 @@ def _close():
             _PLAYWRIGHT = _BROWSER = _PAGE = None
 
 
-def register(mcp):
-    @mcp.tool(description=describe(
-        "Use optional Playwright for navigation, clicks, screenshots, or page HTML; private networks are blocked except localhost. "
-        "When to use: Inspect or interact with a web page."
-    ))
-    def browser_action(
-        action: Annotated[
-            Literal["navigate", "click", "screenshot", "get_html", "close"],
-            Field(description="Browser operation: navigate to a URL, click a selector, capture a screenshot, return page HTML, or close the browser session."),
-        ],
-        url: Annotated[
-            str | None,
-            Field(description="Public HTTP(S) URL required for navigate. Localhost is allowed; private and reserved network addresses are blocked."),
-        ] = None,
-        selector: Annotated[
-            str | None,
-            Field(description="CSS selector required for click; the first matching element is clicked."),
-        ] = None,
-    ) -> dict:
+def browser_action(
+    action: Annotated[
+        Literal["navigate", "click", "screenshot", "get_html", "close"],
+        Field(description="Browser operation: navigate to a URL, click a selector, capture a screenshot, return page HTML, or close the browser session."),
+    ],
+    url: Annotated[
+        str | None,
+        Field(description="Public HTTP(S) URL required for navigate. Localhost is allowed; private and reserved network addresses are blocked."),
+    ] = None,
+    selector: Annotated[
+        str | None,
+        Field(description="CSS selector required for click; the first matching element is clicked."),
+    ] = None,
+) -> dict:
         global _PAGE
         with _LOCK:
             if action == "close":
@@ -125,3 +120,12 @@ def register(mcp):
                     raise ValueError("Screenshot exceeds the 2 MiB response limit")
                 return {"supported": True, "url": page.url, "content_type": "image/png", "base64": base64.b64encode(image).decode("ascii")}
             return {"supported": True, "url": page.url, "html": page.content()[:50000]}
+
+
+def register(mcp):
+    return mcp.tool(description=describe(
+        "Use optional Playwright for navigation, clicks, screenshots, or page HTML; private networks are blocked except localhost. "
+        "Requires optional Playwright package and Chromium browser. "
+        "When to use: Inspect or interact with a web page."
+    ))(browser_action)
+

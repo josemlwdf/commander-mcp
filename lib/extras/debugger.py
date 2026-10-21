@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import multiprocessing
 import os
+import signal
 import socket
 import threading
+import time
 from collections import deque
 from typing import Annotated, Literal
 
@@ -14,7 +17,8 @@ from ..support import inside, describe
 
 
 _LOCK = threading.Lock()
-_ACTIVE = None
+_WORKER_PROC: multiprocessing.Process | None = None
+_PARENT_CONN = None
 
 
 class _DapClient:
@@ -113,8 +117,7 @@ def _configured_endpoint() -> tuple[str, int] | None:
     return host, port
 
 
-def _start(client: _DapClient, breakpoint_file: str | None, line: int | None) -> None:
-    raw_config = os.environ.get("HANDY_CODER_DAP_START_REQUEST", "").strip()
+def _start(client: _DapClient, breakpoint_file: str | None, line: int | None, raw_config: str, adapter_id: str) -> None:
     if not raw_config:
         raise ValueError("Set HANDY_CODER_DAP_START_REQUEST to a JSON launch/attach request before starting a session")
     config = json.loads(raw_config)
@@ -136,7 +139,7 @@ def _start(client: _DapClient, breakpoint_file: str | None, line: int | None) ->
     client.request("initialize", {
         "clientID": "handy-coder-mcp",
         "clientName": "Handy Coder MCP",
-        "adapterID": os.environ.get("HANDY_CODER_DAP_ADAPTER_ID", "python"),
+        "adapterID": adapter_id,
         "pathFormat": "path",
         "linesStartAt1": True,
         "columnsStartAt1": True,
@@ -159,6 +162,131 @@ def _start(client: _DapClient, breakpoint_file: str | None, line: int | None) ->
     client.request("configurationDone")
 
 
+def _debugger_worker_main(conn, root_str: str | None = None, shell_str: str | None = None) -> None:
+    """Supervised worker process loop maintaining DAP session state across calls."""
+    from .. import support
+    if root_str:
+        try:
+            support.configure(root_str, shell_str)
+        except Exception:
+            pass
+    active_client: _DapClient | None = None
+    try:
+        while True:
+            try:
+                msg = conn.recv()
+            except EOFError:
+                break
+            if msg == "shutdown":
+                break
+            action, breakpoint_file, line, endpoint, raw_config, adapter_id = msg
+            try:
+                if action == "start":
+                    if active_client is not None:
+                        raise ValueError("A debugger session is already active; stop it before starting another")
+                    client = _DapClient(*endpoint)
+                    try:
+                        _start(client, breakpoint_file, line, raw_config, adapter_id)
+                    except Exception:
+                        client.close()
+                        raise
+                    active_client = client
+                    conn.send(("ok", {
+                        "supported": True,
+                        "action": "start",
+                        "message": "DAP session started; execution will stop at a configured breakpoint or adapter entry point.",
+                    }))
+                    continue
+
+                if active_client is None:
+                    raise ValueError("No active debugger session; use action='start' first")
+
+                client = active_client
+                if action == "stop":
+                    try:
+                        client.request("disconnect", {"terminateDebuggee": False})
+                    finally:
+                        client.close()
+                        active_client = None
+                    conn.send(("ok", {"supported": True, "action": "stop"}))
+                    continue
+
+                if action in ("step_over", "step_into"):
+                    thread_id = client.stopped_thread()
+                    client.request("next" if action == "step_over" else "stepIn", {"threadId": thread_id})
+                    conn.send(("ok", {"supported": True, "action": action, "thread_id": thread_id}))
+                    continue
+
+                thread_id = client.stopped_thread()
+                stack = client.request("stackTrace", {"threadId": thread_id, "startFrame": 0, "levels": 1})
+                frames = stack.get("stackFrames", [])
+                if not frames:
+                    conn.send(("ok", {"supported": True, "variables": []}))
+                    continue
+                scopes = client.request("scopes", {"frameId": frames[0]["id"]}).get("scopes", [])
+                variables = []
+                for scope in scopes:
+                    response = client.request("variables", {"variablesReference": scope["variablesReference"]})
+                    variables.extend(response.get("variables", []))
+                conn.send(("ok", {
+                    "supported": True,
+                    "thread_id": thread_id,
+                    "frame": frames[0],
+                    "variables": variables[:200],
+                }))
+            except Exception as exc:
+                conn.send(("error", exc))
+    finally:
+        if active_client is not None:
+            try:
+                active_client.close()
+            except Exception:
+                pass
+        conn.close()
+
+
+_MP_CTX = multiprocessing.get_context("spawn")
+
+
+def _ensure_worker() -> None:
+    global _WORKER_PROC, _PARENT_CONN
+    if _WORKER_PROC is not None and _WORKER_PROC.is_alive():
+        return
+    parent_conn, child_conn = _MP_CTX.Pipe(duplex=True)
+    from .. import support
+    root_str = str(support.ROOT) if support.ROOT else None
+    shell_str = support.SHELL
+    proc = _MP_CTX.Process(
+        target=_debugger_worker_main,
+        args=(child_conn, root_str, shell_str),
+        daemon=True,
+    )
+    proc.start()
+    child_conn.close()
+    _WORKER_PROC = proc
+    _PARENT_CONN = parent_conn
+
+
+def _stop_worker() -> None:
+    global _WORKER_PROC, _PARENT_CONN
+    if _PARENT_CONN is not None:
+        try:
+            _PARENT_CONN.send("shutdown")
+            _PARENT_CONN.close()
+        except Exception:
+            pass
+        _PARENT_CONN = None
+    if _WORKER_PROC is not None:
+        try:
+            _WORKER_PROC.join(timeout=1)
+            if _WORKER_PROC.is_alive():
+                _WORKER_PROC.kill()
+                _WORKER_PROC.join(timeout=1)
+        except Exception:
+            pass
+        _WORKER_PROC = None
+
+
 def register(mcp):
     @mcp.tool(description=describe(
         "Control a local DAP adapter configured with HANDY_CODER_DAP_HOST/PORT and HANDY_CODER_DAP_START_REQUEST. "
@@ -178,52 +306,42 @@ def register(mcp):
             Field(description="Optional 1-based breakpoint line used with breakpoint_file when starting a session."),
         ] = None,
     ) -> dict:
-        global _ACTIVE
-        with _LOCK:
-            # Check endpoint config first, before any action-specific logic
-            endpoint = _configured_endpoint()
-            if endpoint is None:
-                return {"supported": False, "message": "Set HANDY_CODER_DAP_PORT and configure a local DAP adapter to enable debugging."}
-            if action == "start":
-                if _ACTIVE is not None:
-                    raise ValueError("A debugger session is already active; stop it before starting another")
-                client = _DapClient(*endpoint)
-                try:
-                    _start(client, breakpoint_file, line)
-                except Exception:
-                    client.close()
-                    raise
-                _ACTIVE = client
-                return {"supported": True, "action": "start", "message": "DAP session started; execution will stop at a configured breakpoint or adapter entry point."}
-
-            if _ACTIVE is None:
-                raise ValueError("No active debugger session; use action='start' first")
-            client = _ACTIVE
-            if action == "stop":
-                try:
-                    client.request("disconnect", {"terminateDebuggee": False})
-                finally:
-                    client.close()
-                    _ACTIVE = None
-                return {"supported": True, "action": "stop"}
-            if action in ("step_over", "step_into"):
-                thread_id = client.stopped_thread()
-                client.request("next" if action == "step_over" else "stepIn", {"threadId": thread_id})
-                return {"supported": True, "action": action, "thread_id": thread_id}
-
-            thread_id = client.stopped_thread()
-            stack = client.request("stackTrace", {"threadId": thread_id, "startFrame": 0, "levels": 1})
-            frames = stack.get("stackFrames", [])
-            if not frames:
-                return {"supported": True, "variables": []}
-            scopes = client.request("scopes", {"frameId": frames[0]["id"]}).get("scopes", [])
-            variables = []
-            for scope in scopes:
-                response = client.request("variables", {"variablesReference": scope["variablesReference"]})
-                variables.extend(response.get("variables", []))
+        endpoint = _configured_endpoint()
+        if endpoint is None:
             return {
-                "supported": True,
-                "thread_id": thread_id,
-                "frame": frames[0],
-                "variables": variables[:200],
+                "supported": False,
+                "message": "Set HANDY_CODER_DAP_PORT and configure a local DAP adapter to enable debugging.",
             }
+
+        start_request = os.environ.get("HANDY_CODER_DAP_START_REQUEST", "").strip()
+        adapter_id = os.environ.get("HANDY_CODER_DAP_ADAPTER_ID", "python")
+
+        with _LOCK:
+            _ensure_worker()
+            start_time = time.monotonic()
+            req = (action, breakpoint_file, line, endpoint, start_request, adapter_id)
+            try:
+                _PARENT_CONN.send(req)
+                if not _PARENT_CONN.poll(30.0):
+                    _stop_worker()
+                    duration_ms = round((time.monotonic() - start_time) * 1000)
+                    return {
+                        "error_code": "timeout",
+                        "message": "Debugger action timed out after 30.0s",
+                        "duration_ms": duration_ms,
+                        "timed_out": True,
+                        "timeout_ms": 30000,
+                    }
+                status, payload = _PARENT_CONN.recv()
+            except EOFError:
+                _stop_worker()
+                duration_ms = round((time.monotonic() - start_time) * 1000)
+                return {
+                    "error_code": "worker_crash",
+                    "message": "Debugger worker process crashed",
+                    "duration_ms": duration_ms,
+                }
+
+            if status == "error":
+                raise payload
+            return payload

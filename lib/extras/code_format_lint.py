@@ -30,25 +30,20 @@ def _tool_path(name: str, root: Path) -> str | None:
         return None
 
 
-def register(mcp):
-    @mcp.tool(description=describe(
-        "Lint or format Python and JavaScript/TypeScript with installed tools; fix=true applies changes. "
-        "When to use: Check or format selected files."
-    ))
-    def code_format_lint(
-        paths: Annotated[
-            list[str],
-            Field(description="Workspace-relative files or directories to lint or format."),
-        ],
-        fix: Annotated[
-            bool,
-            Field(description="Apply available automatic fixes and formatting changes when true; otherwise run checks without writing changes."),
-        ] = False,
-        language: Annotated[
-            Literal["auto", "python", "javascript"],
-            Field(description="File language selection. auto infers one supported language from file extensions; specify a language for directories or mixed/unrecognized paths."),
-        ] = "auto",
-    ) -> dict:
+def code_format_lint(
+    paths: Annotated[
+        list[str],
+        Field(min_length=1, description="Workspace-relative files or directories to lint or format."),
+    ],
+    fix: Annotated[
+        bool,
+        Field(description="Apply available automatic fixes and formatting changes when true; otherwise run checks without writing changes."),
+    ] = False,
+    language: Annotated[
+        Literal["auto", "python", "javascript"],
+        Field(description="File language selection. auto infers one supported language from file extensions; specify a language for directories or mixed/unrecognized paths."),
+    ] = "auto",
+) -> dict:
         if not paths:
             raise ValueError("paths must contain at least one workspace path")
         resolved = [inside(path, must_exist=True) for path in paths]
@@ -114,3 +109,12 @@ def register(mcp):
             if not available:
                 return {"supported": False, "message": "Install ESLint or Prettier locally to lint/format JavaScript or TypeScript files.", "tools_run": tools_run, "tools_skipped": tools_skipped}
         return {"supported": True, "fix": fix, "reports": reports, "tools_run": tools_run, "tools_skipped": tools_skipped}
+
+
+def register(mcp):
+    return mcp.tool(description=describe(
+        "Lint or format Python and JavaScript/TypeScript with installed tools; fix=true applies changes. "
+        "Discloses which tools ran or were skipped in tools_run and tools_skipped. "
+        "When to use: Check or format selected files."
+    ))(code_format_lint)
+

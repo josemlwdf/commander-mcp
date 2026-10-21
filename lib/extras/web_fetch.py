@@ -108,6 +108,8 @@ def _fetch(url: str) -> dict:
     return {
         "supported": True,
         "url": final_url,
+        "final_url": final_url,
+        "status": http_status,
         "http_status": http_status,
         "title": title,
         "content_type": content_type,
@@ -139,23 +141,34 @@ def _search(query: str) -> dict:
                 "url": item["url"][:2048],
                 "snippet": str(item.get("snippet", ""))[:1200],
             })
-    return {"supported": True, "search_url": final_url, "http_status": http_status, "results": clean}
+    return {
+        "supported": True,
+        "search_url": final_url,
+        "final_url": final_url,
+        "status": http_status,
+        "http_status": http_status,
+        "results": clean,
+        "truncated": False,
+    }
+
+
+def web_fetch_docs(
+    url: Annotated[str | None, Field(description="Public HTTP(S) URL to fetch as text. Provide exactly one of url or search_query; private, local, and reserved network targets are blocked.")] = None,
+    search_query: Annotated[str | None, Field(description="Non-empty web search query sent to the trusted endpoint configured by HANDY_CODER_SEARCH_URL. Provide exactly one of url or search_query.")] = None,
+) -> dict:
+    if bool(url) == bool(search_query):
+        raise ValueError("Provide exactly one of url or search_query")
+    if url:
+        return _fetch(url)
+    if not search_query or not search_query.strip():
+        raise ValueError("search_query cannot be empty")
+    return _search(search_query.strip())
 
 
 def register(mcp):
-    @mcp.tool(description=describe(
+    return mcp.tool(description=describe(
         "Fetch public HTTP(S) text or search via HANDY_CODER_SEARCH_URL; private targets are blocked. "
         "Response includes http_status, final_url, and truncated flag. "
         "When to use: Read external documentation or find web pages."
-    ))
-    def web_fetch_docs(
-        url: Annotated[str | None, Field(description="Public HTTP(S) URL to fetch as text. Provide exactly one of url or search_query; private, local, and reserved network targets are blocked.")] = None,
-        search_query: Annotated[str | None, Field(description="Non-empty web search query sent to the trusted endpoint configured by HANDY_CODER_SEARCH_URL. Provide exactly one of url or search_query.")] = None,
-    ) -> dict:
-        if bool(url) == bool(search_query):
-            raise ValueError("Provide exactly one of url or search_query")
-        if url:
-            return _fetch(url)
-        if not search_query or not search_query.strip():
-            raise ValueError("search_query cannot be empty")
-        return _search(search_query.strip())
+    ))(web_fetch_docs)
+

@@ -20,15 +20,10 @@ MAX_FILE_BYTES = 128 * 1024
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build"}
 
 
-def register(mcp):
-    @mcp.tool(description=describe(
-        "Search source semantically with local model HANDY_CODER_EMBEDDING_MODEL; downloads are disabled. "
-        "When to use: Find code by concept or intent."
-    ))
-    def vector_search_codebase(
-        natural_language_query: Annotated[str, Field(description="Non-empty natural-language description of the code or behavior to find.")],
-        top_k: Annotated[int, Field(description="Maximum number of ranked file matches to return, from 1 to 20.")]=5,
-    ) -> dict:
+def vector_search_codebase(
+    natural_language_query: Annotated[str, Field(description="Non-empty natural-language description of the code or behavior to find.")],
+    top_k: Annotated[int, Field(ge=1, le=20, description="Maximum number of ranked file matches to return, from 1 to 20.")] = 5,
+) -> dict:
         if not natural_language_query.strip():
             raise ValueError("natural_language_query cannot be empty")
         if not 1 <= top_k <= 20:
@@ -88,3 +83,12 @@ def register(mcp):
                 "snippet": text[:1200],
             })
         return {"supported": True, "matches": matches, "indexed_files": len(documents)}
+
+
+def register(mcp):
+    return mcp.tool(description=describe(
+        "Search source semantically with local model HANDY_CODER_EMBEDDING_MODEL; downloads are disabled. "
+        "Requires sentence-transformers and HANDY_CODER_EMBEDDING_MODEL. "
+        "When to use: Find code by concept or intent."
+    ))(vector_search_codebase)
+
