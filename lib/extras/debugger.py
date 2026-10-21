@@ -180,12 +180,13 @@ def register(mcp):
     ) -> dict:
         global _ACTIVE
         with _LOCK:
+            # Check endpoint config first, before any action-specific logic
+            endpoint = _configured_endpoint()
+            if endpoint is None:
+                return {"supported": False, "message": "Set HANDY_CODER_DAP_PORT and configure a local DAP adapter to enable debugging."}
             if action == "start":
                 if _ACTIVE is not None:
                     raise ValueError("A debugger session is already active; stop it before starting another")
-                endpoint = _configured_endpoint()
-                if endpoint is None:
-                    return {"supported": False, "message": "Set HANDY_CODER_DAP_PORT and configure a local DAP adapter to enable debugging."}
                 client = _DapClient(*endpoint)
                 try:
                     _start(client, breakpoint_file, line)

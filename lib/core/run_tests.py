@@ -1,6 +1,7 @@
 import json
 import configparser
 import tomllib
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -30,6 +31,19 @@ def _has_python_test_setup(root) -> bool:
         )
         for directory in (root / "test", root / "tests")
     )
+
+def _path_looks_like_test(path: Path) -> bool:
+    """Return True if the path itself is/contains test files."""
+    if path.is_file():
+        name = path.name
+        return name.startswith("test_") or name.endswith("_test.py")
+    if path.is_dir():
+        return (
+            any(path.glob("test_*.py")) or
+            any(path.glob("*_test.py")) or
+            path.name in ("test", "tests")
+        )
+    return False
 
 def _package_config(root) -> dict:
     package = root / "package.json"
@@ -67,9 +81,28 @@ def _detect_framework(root) -> str | None:
         return "pytest"
     return None
 
+def _parse_pytest_output(stdout: str) -> dict | None:
+    """Extract summary counts from pytest terminal output."""
+    import re
+    # Look for lines like: "5 passed, 2 failed, 1 error in 0.5s"
+    pattern = re.search(
+        r'(\d+) passed(?:,\s*(\d+) failed)?(?:,\s*(\d+) error)?(?:,\s*(\d+) warning)?',
+        stdout
+    )
+    if not pattern:
+        return None
+    return {
+        "passed": int(pattern.group(1) or 0),
+        "failed": int(pattern.group(2) or 0),
+        "errors": int(pattern.group(3) or 0),
+        "warnings": int(pattern.group(4) or 0),
+    }
+
 def register(mcp):
     @mcp.tool(description=describe(
-        "Run configured Jest, Vitest, or pytest tests; unfiltered runs require recognized test setup and filter_path is workspace-confined. "
+        "Run configured Jest, Vitest, or pytest tests; unfiltered runs require recognized test setup. "
+        "filter_path is workspace-confined; when it points to test files, discovery is skipped. "
+        "Returns parsed summary counts when available. "
         "When to use: Execute project tests."
     ))
     def run_tests(
@@ -79,7 +112,7 @@ def register(mcp):
         ] = None,
         filter_path: Annotated[
             str | None,
-            Field(description="Optional workspace-relative test file or target path. When supplied, runs a targeted test without requiring workspace-wide test discovery."),
+            Field(description="Optional workspace-relative test file or target path. When supplied and points to test files, runs without requiring workspace-wide test discovery."),
         ] = None,
     ) -> dict:
         root = inside(".")
@@ -94,6 +127,8 @@ def register(mcp):
                 "message": "No Jest, Vitest, or pytest setup detected.",
             }
         target = inside(filter_path) if filter_path else None
+        # Allow targeted runs when the filter path itself looks like tests
+        filter_is_test = target is not None and _path_looks_like_test(target)
         if target is None and not _has_test_setup(root, framework):
             return {
                 "supported": False,
@@ -106,4 +141,10 @@ def register(mcp):
             cmd = ["pytest"] + ([str(target)] if target else [])
         else:
             cmd = ["npx", "--no-install", framework, "run"] + ([str(target)] if target else [])
-        return {"supported": True, "framework": framework, **run_process(cmd, cwd=root)}
+        result = run_process(cmd, cwd=root)
+        out = {"supported": True, "framework": framework, **result}
+        if framework == "pytest":
+            parsed = _parse_pytest_output(result.get("stdout", "") + result.get("stderr", ""))
+            if parsed:
+                out["parsed"] = parsed
+        return out

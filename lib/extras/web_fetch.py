@@ -73,17 +73,19 @@ class _TextExtractor(HTMLParser):
             self.parts.append(data)
 
 
-def _request(url: str) -> tuple[bytes, str, str]:
+def _request(url: str) -> tuple[bytes, str, str, int, bool]:
+    """Returns (body, final_url, content_type, http_status, truncated)."""
     _public_http_url(url)
     request = Request(url, headers={"User-Agent": "HandyCoderMCP/2.0", "Accept": "text/html,application/json,text/plain"})
     opener = build_opener(_SafeRedirect())
     try:
         with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             content_type = response.headers.get_content_type()
-            body = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(body) > MAX_RESPONSE_BYTES:
-                raise ValueError("Web response exceeds the 1 MiB size limit")
-            return body, response.geturl(), content_type
+            http_status = response.status
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            truncated = len(raw) > MAX_RESPONSE_BYTES
+            body = raw[:MAX_RESPONSE_BYTES]
+            return body, response.geturl(), content_type, http_status, truncated
     except HTTPError as exc:
         raise RuntimeError(f"Web request failed with HTTP {exc.code}: {exc.reason}") from exc
     except URLError as exc:
@@ -91,7 +93,7 @@ def _request(url: str) -> tuple[bytes, str, str]:
 
 
 def _fetch(url: str) -> dict:
-    body, final_url, content_type = _request(url)
+    body, final_url, content_type, http_status, truncated = _request(url)
     decoded = body.decode("utf-8", "replace")
     if content_type in ("text/html", "application/xhtml+xml"):
         parser = _TextExtractor()
@@ -102,7 +104,16 @@ def _fetch(url: str) -> dict:
         if not content_type.startswith("text/") and content_type not in ("application/json", "application/xml"):
             raise ValueError(f"Unsupported non-text web response: {content_type}")
         title = ""
-    return {"supported": True, "url": final_url, "title": title, "content_type": content_type, "content": decoded[:20000]}
+    content = decoded[:20000]
+    return {
+        "supported": True,
+        "url": final_url,
+        "http_status": http_status,
+        "title": title,
+        "content_type": content_type,
+        "content": content,
+        "truncated": truncated or len(decoded) > 20000,
+    }
 
 
 def _search(query: str) -> dict:
@@ -113,7 +124,7 @@ def _search(query: str) -> dict:
     params = parse_qsl(parsed.query, keep_blank_values=True)
     params.append(("q", query))
     search_url = urlunparse(parsed._replace(query=urlencode(params)))
-    body, final_url, content_type = _request(search_url)
+    body, final_url, content_type, http_status, truncated = _request(search_url)
     if content_type != "application/json":
         raise ValueError("Configured search endpoint must return application/json")
     payload = json.loads(body.decode("utf-8"))
@@ -128,17 +139,18 @@ def _search(query: str) -> dict:
                 "url": item["url"][:2048],
                 "snippet": str(item.get("snippet", ""))[:1200],
             })
-    return {"supported": True, "search_url": final_url, "results": clean}
+    return {"supported": True, "search_url": final_url, "http_status": http_status, "results": clean}
 
 
 def register(mcp):
     @mcp.tool(description=describe(
         "Fetch public HTTP(S) text or search via HANDY_CODER_SEARCH_URL; private targets are blocked. "
+        "Response includes http_status, final_url, and truncated flag. "
         "When to use: Read external documentation or find web pages."
     ))
     def web_fetch_docs(
-        url: Annotated[str | None, Field(description="Public HTTP(S) URL to fetch as text. Provide exactly one of url or search_query; private, local, and reserved network targets are blocked.")]=None,
-        search_query: Annotated[str | None, Field(description="Non-empty web search query sent to the trusted endpoint configured by HANDY_CODER_SEARCH_URL. Provide exactly one of url or search_query.")]=None,
+        url: Annotated[str | None, Field(description="Public HTTP(S) URL to fetch as text. Provide exactly one of url or search_query; private, local, and reserved network targets are blocked.")] = None,
+        search_query: Annotated[str | None, Field(description="Non-empty web search query sent to the trusted endpoint configured by HANDY_CODER_SEARCH_URL. Provide exactly one of url or search_query.")] = None,
     ) -> dict:
         if bool(url) == bool(search_query):
             raise ValueError("Provide exactly one of url or search_query")

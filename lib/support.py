@@ -10,6 +10,10 @@ SHELL = os.environ.get("SHELL") or ("powershell.exe" if os.name == "nt" else "/b
 MAX_READ_BYTES = 2 * 1024 * 1024
 MAX_OUTPUT_BYTES = 1024 * 1024
 DEFAULT_TIMEOUT_MS = 30_000
+# Maximum seconds a tool handler subprocess is allowed to run.
+# This constant documents the intended deadline for future worker-subprocess
+# isolation; see lib/_worker.py for the run_in_worker implementation.
+WORKER_DEADLINE_SECONDS = 30.0
 
 def configure(root: str, shell: str | None = None) -> None:
     global ROOT, WORKING_DIRECTORY, SHELL

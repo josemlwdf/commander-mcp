@@ -2,6 +2,21 @@
 from __future__ import annotations
 import argparse, os, sys
 from pathlib import Path
+
+
+def _default_root() -> str:
+    # 1. Explicit env override
+    if root := os.environ.get("HANDY_CODER_ROOT", "").strip():
+        return root
+    # 2. VS Code workspace folder (set by some MCP clients)
+    if root := os.environ.get("VSCODE_WORKSPACE_FOLDER", "").strip():
+        return root
+    # 3. When run directly as a script, use the script's parent directory
+    script_dir = Path(__file__).resolve().parent
+    if (script_dir / "pyproject.toml").exists() or (script_dir / ".git").exists():
+        return str(script_dir)
+    # 4. Current working directory
+    return os.getcwd()
 try:
     from mcp.server.fastmcp import FastMCP
 except ModuleNotFoundError as exc:
@@ -25,7 +40,7 @@ from lib.extras import (
 
 def main() -> None:
     parser=argparse.ArgumentParser(description="Workspace-confined Handy Coder MCP server")
-    parser.add_argument("-r","--root",default=os.environ.get("HANDY_CODER_ROOT", os.getcwd()))
+    parser.add_argument("-r","--root",default=_default_root())
     parser.add_argument("-s","--shell",default=None,help="Override command shell")
     args=parser.parse_args()
     try: support.configure(args.root,args.shell)

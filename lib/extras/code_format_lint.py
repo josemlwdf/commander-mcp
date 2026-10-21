@@ -73,28 +73,44 @@ def register(mcp):
         args = [str(path) for path in resolved]
         root = inside(".")
         reports = []
+        tools_run = []
+        tools_skipped = []
         if language == "python":
             ruff = shutil.which("ruff")
             black = shutil.which("black")
             if ruff:
+                tools_run.append("ruff")
                 reports.append({"tool": "ruff", **_run(ruff, ["check", *(["--fix"] if fix else []), *args], root)})
+                tools_run.append("ruff-format")
                 format_args = ["format", *([] if fix else ["--check"]), *args]
                 reports.append({"tool": "ruff-format", **_run(ruff, format_args, root)})
+                if not shutil.which("black"):
+                    tools_skipped.append("black")
             elif black:
+                if not shutil.which("ruff"):
+                    tools_skipped.append("ruff")
+                tools_run.append("black")
                 command_args = ([] if fix else ["--check"]) + args
                 reports.append({"tool": "black", **_run(black, command_args, root)})
             else:
-                return {"supported": False, "message": "Install Ruff or Black locally to lint/format Python files."}
+                tools_skipped.extend(["ruff", "black"])
+                return {"supported": False, "message": "Install Ruff or Black locally to lint/format Python files.", "tools_run": tools_run, "tools_skipped": tools_skipped}
         else:
             available = False
             eslint = _tool_path("eslint", root)
             prettier = _tool_path("prettier", root)
             if eslint:
                 available = True
+                tools_run.append("eslint")
                 reports.append({"tool": "eslint", **_run(eslint, [*(["--fix"] if fix else []), *args], root)})
+            else:
+                tools_skipped.append("eslint")
             if prettier:
                 available = True
+                tools_run.append("prettier")
                 reports.append({"tool": "prettier", **_run(prettier, ["--write" if fix else "--check", *args], root)})
+            else:
+                tools_skipped.append("prettier")
             if not available:
-                return {"supported": False, "message": "Install ESLint or Prettier locally to lint/format JavaScript or TypeScript files."}
-        return {"supported": True, "fix": fix, "reports": reports}
+                return {"supported": False, "message": "Install ESLint or Prettier locally to lint/format JavaScript or TypeScript files.", "tools_run": tools_run, "tools_skipped": tools_skipped}
+        return {"supported": True, "fix": fix, "reports": reports, "tools_run": tools_run, "tools_skipped": tools_skipped}

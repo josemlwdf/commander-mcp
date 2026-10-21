@@ -12,6 +12,7 @@ class LineRange(BaseModel):
 def register(mcp):
     @mcp.tool(description=describe(
         "Read UTF-8 workspace files (max 2 MiB each), optionally by 1-based line range. "
+        "Response includes total_lines and, when a range is applied, the applied start and end. "
         "When to use: Inspect known files."
     ))
     def read_files(
@@ -24,20 +25,33 @@ def register(mcp):
             Field(description="Optional 1-based line ranges for selected files. Each range's path must match a path in paths; files without a range are read in full."),
         ] = None,
     ) -> dict:
-        ranges = {r.path:r for r in (line_ranges or [])}
-        output=[]
+        ranges = {r.path: r for r in (line_ranges or [])}
+        output = []
         for name in paths:
-            p=inside(name, must_exist=True)
-            if not p.is_file(): raise ValueError(f"Not a file: {name}")
-            if p.stat().st_size > MAX_READ_BYTES: raise ValueError(f"File exceeds 2 MiB read limit: {name}")
-            content=p.read_text(encoding="utf-8")
-            if name in ranges:
-                r=ranges[name]; start=int(r.start); end=int(r.end)
-                if start < 1 or end < start: raise ValueError("line ranges require 1 <= start <= end")
-                content="\n".join(content.splitlines()[start-1:end])
-            output.append({
+            p = inside(name, must_exist=True)
+            if not p.is_file():
+                raise ValueError(f"Not a file: {name}")
+            if p.stat().st_size > MAX_READ_BYTES:
+                raise ValueError(f"File exceeds 2 MiB read limit: {name}")
+            full_content = p.read_text(encoding="utf-8")
+            all_lines = full_content.splitlines()
+            total_lines = len(all_lines)
+            entry = {
                 "path": str(p.relative_to(support.ROOT)),
                 "resolved_path": str(p),
-                "content": content,
-            })
-        return {"files":output}
+                "total_lines": total_lines,
+            }
+            if name in ranges:
+                r = ranges[name]
+                start = int(r.start)
+                end = int(r.end)
+                if start < 1 or end < start:
+                    raise ValueError("line ranges require 1 <= start <= end")
+                content = "\n".join(all_lines[start - 1:end])
+                entry["content"] = content
+                entry["applied_start"] = start
+                entry["applied_end"] = min(end, total_lines)
+            else:
+                entry["content"] = full_content
+            output.append(entry)
+        return {"files": output}

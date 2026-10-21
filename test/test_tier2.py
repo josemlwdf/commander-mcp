@@ -111,7 +111,7 @@ while True:
     def test_web_fetch_extracts_html_and_omits_scripts(self):
         with patch.object(web_fetch, "_request", return_value=(
             b"<html><title>Docs</title><script>secret()</script><p>Useful text</p></html>",
-            "https://example.com/docs", "text/html",
+            "https://example.com/docs", "text/html", 200, False,
         )):
             result = web_fetch._fetch("https://example.com/docs")
         self.assertEqual(result["title"], "Docs")
@@ -204,6 +204,37 @@ while True:
                 ["test/test_tier2.py"], language="python"
             )
         self.assertFalse(result["supported"])
+
+    def test_web_fetch_returns_http_status_field(self):
+        with patch.object(web_fetch, "_request", return_value=(
+            b"<html><title>T</title><p>Hello</p></html>",
+            "https://example.com/", "text/html", 200, False,
+        )):
+            result = self.tools.tools["web_fetch_docs"](url="https://example.com/")
+        self.assertIn("http_status", result)
+        self.assertEqual(result["http_status"], 200)
+
+    def test_format_lint_returns_tools_run_and_tools_skipped(self):
+        with patch("lib.extras.code_format_lint.shutil.which", return_value=None):
+            result = self.tools.tools["code_format_lint"](
+                ["test/test_tier2.py"], language="python"
+            )
+        self.assertIn("tools_run", result)
+        self.assertIn("tools_skipped", result)
+        self.assertIsInstance(result["tools_run"], list)
+        self.assertIsInstance(result["tools_skipped"], list)
+
+    def test_format_lint_reports_tools_run_when_tool_found(self):
+        import shutil as _shutil
+        ruff_path = _shutil.which("ruff")
+        if not ruff_path:
+            self.skipTest("ruff not installed")
+        result = self.tools.tools["code_format_lint"](
+            ["test/test_tier2.py"], language="python"
+        )
+        self.assertTrue(result["supported"])
+        self.assertIn("ruff", result["tools_run"])
+        self.assertIn("tools_skipped", result)
 
 
 if __name__ == "__main__":

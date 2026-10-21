@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 from lib import support
 from lib.core import apply_edits, code_search, find_files, git_manage, read_files, run_tests
+from lib.core import diagnostics
+from lib.extras import web_fetch
 
 
 class FakeMCP:
@@ -31,7 +33,7 @@ class CoreFeedbackTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name).resolve()
         support.configure(str(self.root))
         self.mcp = FakeMCP()
-        for module in (apply_edits, code_search, find_files, git_manage, read_files, run_tests):
+        for module in (apply_edits, code_search, find_files, git_manage, read_files, run_tests, diagnostics):
             module.register(self.mcp)
 
     def tearDown(self):
@@ -294,6 +296,125 @@ class CoreFeedbackTests(unittest.TestCase):
 
         self.assertNotIn("error_code", result)
         self.assertEqual(result["exit_code"], 0)
+
+    # ------------------------------------------------------------------
+    # New hardening tests
+    # ------------------------------------------------------------------
+
+    def test_atomic_edit_second_invalid_edit_leaves_first_unapplied(self):
+        """A failed validation in a later edit must leave all earlier files unchanged."""
+        file_a = self.root / "a.txt"
+        file_a.write_text("hello world\n", encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            self.mcp.tools["apply_edits"]([
+                apply_edits.Edit(path="a.txt", old_str="hello", new_str="goodbye"),
+                apply_edits.Edit(path="a.txt", old_str="DOES_NOT_EXIST", new_str="x"),
+            ])
+
+        # File a.txt must be unchanged because the batch was rejected
+        self.assertEqual(file_a.read_text(encoding="utf-8"), "hello world\n")
+
+    def test_read_files_returns_total_lines_and_applied_range(self):
+        f = self.root / "lines.txt"
+        f.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+
+        result = self.mcp.tools["read_files"](
+            ["lines.txt"],
+            line_ranges=[read_files.LineRange(path="lines.txt", start=2, end=4)],
+        )
+
+        entry = result["files"][0]
+        self.assertEqual(entry["total_lines"], 5)
+        self.assertEqual(entry["applied_start"], 2)
+        self.assertEqual(entry["applied_end"], 4)
+        self.assertEqual(entry["content"], "two\nthree\nfour")
+
+    def test_read_files_total_lines_without_range(self):
+        f = self.root / "simple.txt"
+        f.write_text("a\nb\nc\n", encoding="utf-8")
+
+        result = self.mcp.tools["read_files"](["simple.txt"])
+
+        entry = result["files"][0]
+        self.assertEqual(entry["total_lines"], 3)
+        self.assertNotIn("applied_start", entry)
+
+    def test_code_search_returns_error_code_for_invalid_regex(self):
+        result = self.mcp.tools["code_search_ripgrep"]("(unclosed", is_regex=True)
+
+        self.assertEqual(result.get("error_code"), "invalid_regex")
+        self.assertIn("matches", result)
+        self.assertEqual(result["matches"], [])
+
+    def test_find_files_excludes_generated_dirs_by_default(self):
+        (self.root / "__pycache__").mkdir()
+        (self.root / "__pycache__" / "cached.py").write_text("x", encoding="utf-8")
+        (self.root / "src").mkdir()
+        (self.root / "src" / "main.py").write_text("x", encoding="utf-8")
+
+        result = self.mcp.tools["find_files"]("*.py")
+
+        paths = result["files"]
+        self.assertIn("src/main.py", paths)
+        self.assertNotIn("__pycache__/cached.py", paths)
+        self.assertFalse(result["incomplete"])
+
+    def test_find_files_includes_generated_dirs_when_requested(self):
+        (self.root / "__pycache__").mkdir()
+        (self.root / "__pycache__" / "cached.py").write_text("x", encoding="utf-8")
+
+        result = self.mcp.tools["find_files"]("*.py", include_generated=True)
+
+        self.assertIn("__pycache__/cached.py", result["files"])
+
+    def test_run_tests_parses_pytest_output(self):
+        (self.root / "pyproject.toml").write_text(
+            "[tool.pytest.ini_options]\naddopts = '-q'\n", encoding="utf-8"
+        )
+        process_result = {
+            "stdout": "5 passed, 1 failed in 0.3s",
+            "stderr": "",
+            "exit_code": 1,
+            "timed_out": False,
+            "duration_ms": 300,
+        }
+
+        with patch("lib.core.run_tests.run_process", return_value=process_result):
+            result = self.mcp.tools["run_tests"]()
+
+        self.assertIn("parsed", result)
+        self.assertEqual(result["parsed"]["passed"], 5)
+        self.assertEqual(result["parsed"]["failed"], 1)
+
+    def test_diagnostics_returns_exit_code(self):
+        (self.root / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 88\n", encoding="utf-8"
+        )
+        process_result = {
+            "stdout": "",
+            "stderr": "",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 50,
+        }
+
+        with patch("lib.support.run_process", return_value=process_result), \
+             patch("lib.core.diagnostics.run_process", return_value=process_result):
+            result = self.mcp.tools["code_get_diagnostics"]()
+
+        self.assertTrue(result["supported"])
+        self.assertIn("exit_code", result)
+
+    def test_web_fetch_returns_http_status_and_truncated(self):
+        with patch.object(web_fetch, "_request", return_value=(
+            b"<html><title>T</title><p>Hello</p></html>",
+            "https://example.com/", "text/html", 200, False,
+        )):
+            result = web_fetch._fetch("https://example.com/")
+
+        self.assertEqual(result["http_status"], 200)
+        self.assertIn("truncated", result)
 
 
 if __name__ == "__main__":

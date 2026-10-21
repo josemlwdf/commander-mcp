@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from typing import get_args, get_type_hints
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from lib import support
 from lib.core import (
@@ -106,6 +106,46 @@ class ToolSchemaTests(unittest.TestCase):
                                 self.assertNotIn("absolute", field.description.lower())
                                 if "path" in field_name:
                                     self.assertIn("relative", field.description.lower())
+
+    def test_every_tool_argument_has_a_concrete_json_schema(self):
+        schema_keywords = {
+            "type",
+            "$ref",
+            "anyOf",
+            "oneOf",
+            "allOf",
+            "enum",
+            "const",
+        }
+
+        def check_schema(schema, location):
+            self.assertTrue(
+                schema_keywords.intersection(schema),
+                f"{location} has no concrete JSON Schema type",
+            )
+            self.assertNotEqual(
+                schema.get("type"),
+                "unknown",
+                f"{location} has an unknown JSON Schema type",
+            )
+            for key in ("items", "additionalProperties"):
+                nested = schema.get(key)
+                if isinstance(nested, dict):
+                    check_schema(nested, f"{location}.{key}")
+            for key in ("anyOf", "oneOf", "allOf"):
+                for index, nested in enumerate(schema.get(key, [])):
+                    check_schema(nested, f"{location}.{key}[{index}]")
+            for key, nested in schema.get("$defs", {}).items():
+                check_schema(nested, f"{location}.$defs.{key}")
+            for key, nested in schema.get("properties", {}).items():
+                check_schema(nested, f"{location}.properties.{key}")
+
+        for name, function in self.mcp.tools.items():
+            hints = get_type_hints(function, include_extras=True)
+            for parameter in inspect.signature(function).parameters:
+                with self.subTest(tool=name, argument=parameter):
+                    schema = TypeAdapter(hints[parameter]).json_schema()
+                    check_schema(schema, f"{name}.{parameter}")
 
 
 if __name__ == "__main__":
