@@ -1,0 +1,228 @@
+"""Optional client for a locally configured Debug Adapter Protocol server."""
+from __future__ import annotations
+
+import ipaddress
+import json
+import os
+import socket
+import threading
+from collections import deque
+from typing import Annotated, Literal
+
+from pydantic import Field
+from ..support import inside, describe
+
+
+_LOCK = threading.Lock()
+_ACTIVE = None
+
+
+class _DapClient:
+    def __init__(self, host: str, port: int):
+        self.socket = socket.create_connection((host, port), timeout=5)
+        self.socket.settimeout(10)
+        self.reader = self.socket.makefile("rb")
+        self.seq = 1
+        self.events = deque()
+
+    def close(self):
+        try:
+            self.reader.close()
+        finally:
+            self.socket.close()
+
+    def _receive(self) -> dict:
+        length = None
+        while True:
+            line = self.reader.readline()
+            if not line:
+                raise RuntimeError("DAP server closed the connection")
+            if line in (b"\r\n", b"\n"):
+                break
+            key, _, value = line.decode("ascii").partition(":")
+            if key.lower() == "content-length":
+                length = int(value.strip())
+        if length is None or not 1 <= length <= 2 * 1024 * 1024:
+            raise RuntimeError("DAP server returned an invalid Content-Length")
+        payload = self.reader.read(length)
+        if len(payload) != length:
+            raise RuntimeError("DAP server closed during a response")
+        return json.loads(payload)
+
+    def request(self, command: str, arguments: dict | None = None) -> dict:
+        seq = self.seq
+        self.seq += 1
+        payload = json.dumps({
+            "seq": seq, "type": "request", "command": command, "arguments": arguments or {},
+        }).encode()
+        self.socket.sendall(f"Content-Length: {len(payload)}\r\n\r\n".encode() + payload)
+        while True:
+            message = self._receive()
+            if message.get("type") == "event":
+                self.events.append(message)
+                continue
+            if message.get("request_seq") != seq:
+                continue
+            if not message.get("success", False):
+                raise RuntimeError(f"DAP {command} failed: {message.get('message', 'unknown adapter error')}")
+            return message.get("body") or {}
+
+    def wait_event(self, name: str, timeout: float = 10) -> dict:
+        for event in list(self.events):
+            if event.get("event") == name:
+                self.events.remove(event)
+                return event
+        self.socket.settimeout(timeout)
+        try:
+            while True:
+                message = self._receive()
+                if message.get("type") == "event":
+                    if message.get("event") == name:
+                        return message
+                    self.events.append(message)
+        finally:
+            self.socket.settimeout(10)
+
+    def stopped_thread(self) -> int:
+        for event in reversed(self.events):
+            if event.get("event") == "stopped":
+                return int(event.get("body", {}).get("threadId"))
+        event = self.wait_event("stopped")
+        return int(event.get("body", {}).get("threadId"))
+
+
+def _configured_endpoint() -> tuple[str, int] | None:
+    host = os.environ.get("HANDY_CODER_DAP_HOST", "127.0.0.1").strip()
+    raw_port = os.environ.get("HANDY_CODER_DAP_PORT", "").strip()
+    if not raw_port:
+        return None
+    try:
+        port = int(raw_port)
+    except ValueError as exc:
+        raise ValueError("HANDY_CODER_DAP_PORT must be an integer") from exc
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        if host != "localhost":
+            raise ValueError("HANDY_CODER_DAP_HOST must be localhost or a loopback IP address") from exc
+        address = ipaddress.ip_address("127.0.0.1")
+    if not address.is_loopback:
+        raise ValueError("DAP connections are restricted to localhost")
+    if not 1 <= port <= 65535:
+        raise ValueError("HANDY_CODER_DAP_PORT must be between 1 and 65535")
+    return host, port
+
+
+def _start(client: _DapClient, breakpoint_file: str | None, line: int | None) -> None:
+    raw_config = os.environ.get("HANDY_CODER_DAP_START_REQUEST", "").strip()
+    if not raw_config:
+        raise ValueError("Set HANDY_CODER_DAP_START_REQUEST to a JSON launch/attach request before starting a session")
+    config = json.loads(raw_config)
+    if not isinstance(config, dict) or config.get("command") not in ("launch", "attach") or not isinstance(config.get("arguments"), dict):
+        raise ValueError("HANDY_CODER_DAP_START_REQUEST must contain command=launch|attach and an arguments object")
+    arguments = config["arguments"]
+    if breakpoint_file is None and line is not None:
+        raise ValueError("breakpoint_file is required when line is provided")
+    if isinstance(arguments.get("program"), str):
+        program = inside(arguments["program"], must_exist=True)
+        if not program.is_file():
+            raise ValueError("Configured DAP program must be a workspace file")
+        arguments["program"] = str(program)
+    if isinstance(arguments.get("cwd"), str):
+        working_directory = inside(arguments["cwd"], must_exist=True)
+        if not working_directory.is_dir():
+            raise ValueError("Configured DAP cwd must be a workspace directory")
+        arguments["cwd"] = str(working_directory)
+    client.request("initialize", {
+        "clientID": "handy-coder-mcp",
+        "clientName": "Handy Coder MCP",
+        "adapterID": os.environ.get("HANDY_CODER_DAP_ADAPTER_ID", "python"),
+        "pathFormat": "path",
+        "linesStartAt1": True,
+        "columnsStartAt1": True,
+        "supportsVariableType": True,
+        "supportsRunInTerminalRequest": False,
+    })
+    client.wait_event("initialized")
+    if breakpoint_file:
+        if line is None or line < 1:
+            raise ValueError("line must be 1 or greater when breakpoint_file is provided")
+        path = inside(breakpoint_file, must_exist=True)
+        if not path.is_file():
+            raise ValueError(f"Not a file: {breakpoint_file}")
+        client.request("setBreakpoints", {
+            "source": {"path": str(path)},
+            "breakpoints": [{"line": line}],
+            "sourceModified": False,
+        })
+    client.request(config["command"], arguments)
+    client.request("configurationDone")
+
+
+def register(mcp):
+    @mcp.tool(description=describe(
+        "Control a local DAP adapter configured with HANDY_CODER_DAP_HOST/PORT and HANDY_CODER_DAP_START_REQUEST. "
+        "When to use: Start, step through, inspect, or stop a debug session."
+    ))
+    def debug_session_step(
+        action: Annotated[
+            Literal["start", "step_over", "step_into", "inspect_vars", "stop"],
+            Field(description="Debugger operation: start a session, step over or into the current line, inspect current-frame variables, or stop the session."),
+        ],
+        breakpoint_file: Annotated[
+            str | None,
+            Field(description="Optional workspace-relative source file for a breakpoint when starting the session; required if line is supplied."),
+        ] = None,
+        line: Annotated[
+            int | None,
+            Field(description="Optional 1-based breakpoint line used with breakpoint_file when starting a session."),
+        ] = None,
+    ) -> dict:
+        global _ACTIVE
+        with _LOCK:
+            if action == "start":
+                if _ACTIVE is not None:
+                    raise ValueError("A debugger session is already active; stop it before starting another")
+                endpoint = _configured_endpoint()
+                if endpoint is None:
+                    return {"supported": False, "message": "Set HANDY_CODER_DAP_PORT and configure a local DAP adapter to enable debugging."}
+                client = _DapClient(*endpoint)
+                try:
+                    _start(client, breakpoint_file, line)
+                except Exception:
+                    client.close()
+                    raise
+                _ACTIVE = client
+                return {"supported": True, "action": "start", "message": "DAP session started; execution will stop at a configured breakpoint or adapter entry point."}
+
+            if _ACTIVE is None:
+                raise ValueError("No active debugger session; use action='start' first")
+            client = _ACTIVE
+            if action == "stop":
+                try:
+                    client.request("disconnect", {"terminateDebuggee": False})
+                finally:
+                    client.close()
+                    _ACTIVE = None
+                return {"supported": True, "action": "stop"}
+            if action in ("step_over", "step_into"):
+                thread_id = client.stopped_thread()
+                client.request("next" if action == "step_over" else "stepIn", {"threadId": thread_id})
+                return {"supported": True, "action": action, "thread_id": thread_id}
+
+            thread_id = client.stopped_thread()
+            stack = client.request("stackTrace", {"threadId": thread_id, "startFrame": 0, "levels": 1})
+            frames = stack.get("stackFrames", [])
+            if not frames:
+                return {"supported": True, "variables": []}
+            scopes = client.request("scopes", {"frameId": frames[0]["id"]}).get("scopes", [])
+            variables = []
+            for scope in scopes:
+                response = client.request("variables", {"variablesReference": scope["variablesReference"]})
+                variables.extend(response.get("variables", []))
+            return {
+                "supported": True,
+                "thread_id": thread_id,
+                "frame": frames[0],
+                "variables": variables[:200],
+            }

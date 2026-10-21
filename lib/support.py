@@ -1,9 +1,10 @@
 """Shared workspace, MCP, and subprocess support."""
 from __future__ import annotations
-import os, re, shlex, subprocess, time, threading, signal
+import fnmatch, os, re, shlex, subprocess, time, threading, signal
+from collections.abc import Iterator
 from pathlib import Path
 
-ROOT = Path.cwd().resolve()
+ROOT = os.environ.get("PWD")
 WORKING_DIRECTORY = ""
 SHELL = os.environ.get("SHELL") or ("powershell.exe" if os.name == "nt" else "/bin/sh")
 MAX_READ_BYTES = 2 * 1024 * 1024
@@ -14,11 +15,7 @@ def configure(root: str, shell: str | None = None) -> None:
     global ROOT, WORKING_DIRECTORY, SHELL
     ROOT = Path(root).expanduser().resolve(strict=True)
     if not ROOT.is_dir(): raise ValueError(f"Workspace root is not a directory: {ROOT}")
-    try:
-        p = subprocess.run(["pwd"], cwd=ROOT, capture_output=True, text=True, check=True, timeout=5)
-    except Exception as exc:
-        raise RuntimeError(f"Could not run 'pwd' in configured root {ROOT}: {exc}") from exc
-    WORKING_DIRECTORY = p.stdout.strip()
+    WORKING_DIRECTORY = ROOT
     if not WORKING_DIRECTORY: raise RuntimeError(f"'pwd' returned no working directory for {ROOT}")
     if shell: SHELL = shell
 
@@ -28,6 +25,91 @@ def inside(path: str | Path, *, must_exist: bool = False) -> Path:
     try: p.relative_to(ROOT)
     except ValueError: raise ValueError(f"Path escapes authorized workspace root: {path}")
     return p
+
+def iter_workspace_files(
+    *,
+    path_glob: str | None = None,
+    errors: list[dict[str, str]] | None = None,
+) -> Iterator[tuple[Path, str]]:
+    """Yield workspace files and report paths that could not be scanned."""
+    root = inside(".")
+    scan_errors = errors if errors is not None else []
+    prefix = _glob_prefix(path_glob)
+    pending = [root]
+
+    while pending:
+        directory = pending.pop()
+        relative_directory = directory.relative_to(root).as_posix()
+        directory_parts = directory.relative_to(root).parts
+        try:
+            with os.scandir(directory) as entries:
+                sorted_entries = sorted(entries, key=lambda entry: entry.name)
+        except OSError as exc:
+            scan_errors.append({
+                "path": relative_directory or ".",
+                "message": exc.strerror or "Filesystem access failed",
+            })
+            continue
+
+        child_directories = []
+        for entry in sorted_entries:
+            relative_path = (Path(relative_directory) / entry.name).as_posix()
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name == ".git":
+                        continue
+                    child_parts = (*directory_parts, entry.name)
+                    if _may_match_glob_scope(child_parts, prefix):
+                        child_directories.append(Path(entry.path))
+                    continue
+                if not entry.is_file(follow_symlinks=True):
+                    continue
+                try:
+                    resolved = inside(entry.path, must_exist=True)
+                except ValueError:
+                    scan_errors.append({
+                        "path": relative_path,
+                        "message": "Skipped a file that resolves outside the authorized workspace",
+                    })
+                    continue
+                except OSError as exc:
+                    scan_errors.append({
+                        "path": relative_path,
+                        "message": exc.strerror or "Filesystem access failed",
+                    })
+                    continue
+                if path_glob and not fnmatch.fnmatch(relative_path, path_glob):
+                    continue
+                yield resolved, relative_path
+            except OSError as exc:
+                scan_errors.append({
+                    "path": relative_path,
+                    "message": exc.strerror or "Filesystem access failed",
+                })
+        pending.extend(reversed(child_directories))
+
+def _glob_prefix(pattern: str | None) -> tuple[str, ...]:
+    if not pattern:
+        return ()
+    prefix = []
+    for part in pattern.replace("\\", "/").split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return ()
+        if any(character in part for character in "*?["):
+            break
+        prefix.append(part)
+    return tuple(prefix)
+
+def _may_match_glob_scope(path_parts: tuple[str, ...], prefix: tuple[str, ...]) -> bool:
+    if not prefix:
+        return True
+    path_parts = tuple(os.path.normcase(part) for part in path_parts)
+    prefix = tuple(os.path.normcase(part) for part in prefix)
+    if len(path_parts) <= len(prefix):
+        return prefix[:len(path_parts)] == path_parts
+    return path_parts[:len(prefix)] == prefix
 
 def run_process(command: str | list[str], *, cwd: str | Path = ROOT, timeout_ms: int = DEFAULT_TIMEOUT_MS,
                 shell: bool = False, max_output_bytes: int = MAX_OUTPUT_BYTES) -> dict:
@@ -68,6 +150,8 @@ def run_process(command: str | list[str], *, cwd: str | Path = ROOT, timeout_ms:
         except ProcessLookupError: pass
         code=p.wait()
     for t in readers:t.join()
+    p.stdout.close()
+    p.stderr.close()
     def decode(key): return bytes(captured[key]).decode("utf-8","replace")+("\n...[truncated]" if truncated[key] else "")
     stderr_text=decode("stderr")
     if timed_out: stderr_text+=f"\n[TIMEOUT] Process exceeded {timeout_ms}ms."
@@ -107,5 +191,8 @@ def result_text(value: object) -> str:
     import json
     return json.dumps(value, ensure_ascii=False, indent=2)
 
-def describe(text: str) -> str:
-    return f"{text} Working directory: {WORKING_DIRECTORY}. All workspace paths are confined to {ROOT}."
+def describe(text: str, *, include_working_directory: bool = False) -> str:
+    working_directory = f" Working directory: {WORKING_DIRECTORY}." if include_working_directory else ""
+    return (
+        f"{text}{working_directory} Use relative paths."
+    )

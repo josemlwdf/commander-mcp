@@ -31,6 +31,8 @@ Structuring your tools into **3 implementation tiers** ensures a smooth developm
 
 *These tools form the base capabilities required for your agent to read, edit, run, and commit changes.*
 
+The Python modules for these Tier 1 tools are in `lib/core`; optional Tier 2 tool modules are in `lib/extras`.
+
 ### 1. `read_files`
 
 * **MCP Tool Name:** `workspace_read_files`
@@ -84,6 +86,8 @@ Structuring your tools into **3 implementation tiers** ensures a smooth developm
 ## Tier 2: Intelligence & Extended Checks
 
 *These tools reduce hallucinations and give the agent context across external tools, codebases, and docs.*
+
+The Python server registers the six local/configurable tools in this tier. They do not require external services at startup; each reports when its optional backend is not configured. `mcp_gateway_integration` is intentionally excluded. See the README for configuration and security boundaries.
 
 ### 9. `get_symbol_definitions` (LSP)
 

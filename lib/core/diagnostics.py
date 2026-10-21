@@ -1,10 +1,18 @@
 import json, tomllib
 from pathlib import Path
-from .support import inside, run_process, describe
+from typing import Annotated
+
+from pydantic import Field
+from ..support import inside, run_process, describe
 
 def register(mcp):
-    @mcp.tool(description=describe("Detect and run an available project diagnostics check from package.json, pyproject.toml, or common Makefile targets."))
-    def code_get_diagnostics(path: str | None = None) -> dict:
+    @mcp.tool(description=describe(
+        "Detect and run the first configured package, Python, or Makefile diagnostic in the selected workspace directory. "
+        "When to use: Check project health."
+    ))
+    def code_get_diagnostics(
+        path: Annotated[str | None, Field(description="Optional workspace-relative directory to inspect; defaults to the workspace root.")]=None,
+    ) -> dict:
         base=inside(path or ".",must_exist=True); candidates=[]
         pkg=base/"package.json"
         if pkg.is_file():

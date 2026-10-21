@@ -14,4 +14,4 @@ handy-coder-mcp = "handy_coder_mcp:main"
 
 [tool.setuptools]
 py-modules = ["handy_coder_mcp"]
-packages = ["lib"]
+packages = ["lib", "lib.core", "lib.extras"]
