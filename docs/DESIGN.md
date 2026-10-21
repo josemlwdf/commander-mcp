@@ -35,13 +35,13 @@ The Python modules for these Tier 1 tools are in `lib/core`; optional Tier 2 too
 
 ### 1. `read_files`
 
-* **MCP Tool Name:** `workspace_read_files`
+* **MCP Tool Name:** `read_files`
 * **Input Schema:** `{ paths: string[], line_ranges?: { path: string, start: number, end: number }[] }`
 * **Implementation:** Read workspace files directly from disk with UTF-8 encoding. Cap maximum file read size (e.g., 2MB) to prevent context window blowouts.
 
 ### 2. `edit_files`
 
-* **MCP Tool Name:** `workspace_apply_edits`
+* **MCP Tool Name:** `apply_edits`
 * **Input Schema:** `{ edits: Array<{ path: string, old_str?: string, new_str: string, position?: { line: number, col: number } }> }`
 * **Implementation:** Perform localized diff updates or search-and-replace patches instead of full-file overwrites. Returns success/failure status with unified diff string.
 
@@ -59,7 +59,7 @@ The Python modules for these Tier 1 tools are in `lib/core`; optional Tier 2 too
 
 ### 5. `find_files`
 
-* **MCP Tool Name:** `workspace_find_files`
+* **MCP Tool Name:** `find_files`
 * **Input Schema:** `{ glob_pattern: string, exclude_pattern?: string }`
 * **Implementation:** Use fast glob tools (`fast-glob` in Node or `ignore` library to respect `.gitignore`).
 
@@ -71,7 +71,7 @@ The Python modules for these Tier 1 tools are in `lib/core`; optional Tier 2 too
 
 ### 7. `run_tests`
 
-* **MCP Tool Name:** `workspace_run_tests`
+* **MCP Tool Name:** `run_tests`
 * **Input Schema:** `{ test_framework?: "jest" | "pytest" | "vitest", filter_path?: string }`
 * **Implementation:** Triggers test framework CLI commands and formats stdout stack traces into readable JSON structures for the LLM.
 

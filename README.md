@@ -75,17 +75,36 @@ Alternatively, use the installed entry point:
 }
 ```
 
-The server exposes `workspace_read_files`, `workspace_apply_edits`, `terminal_exec`, `code_search_ripgrep`, `workspace_find_files`, `code_get_diagnostics`, `workspace_run_tests`, `git_manage`, `lsp_symbol_lookup`, `vector_search_codebase`, `code_format_lint`, `web_fetch_docs`, `debug_session_step`, and `browser_action`.
+The server registers `read_files`, `apply_edits`, `terminal_exec`, `code_search_ripgrep`, `find_files`, `code_get_diagnostics`, `run_tests`, `git_manage`, `lsp_symbol_lookup`, `vector_search_codebase`, `code_format_lint`, `web_fetch_docs`, `debug_session_step`, and `browser_action`.
 
 Tool modules are organized by tier: Tier 1 tools live in `lib/core`, and optional Tier 2 tools live in `lib/extras`.
+
+### Check a stdio connection
+
+If an MCP client reports request timeouts for every tool, first check that the configured command can start, complete the MCP handshake, list its tools, and answer a harmless read request. From this checkout, run:
+
+```bash
+.venv/bin/python scripts/mcp_smoke_check.py --root "$PWD" --cwd "$PWD"
+```
+
+To check the exact installed command and workspace used by a client, pass them explicitly:
+
+```bash
+.venv/bin/python scripts/mcp_smoke_check.py \
+  --command /path/to/handy-coder-mcp/.venv/bin/handy-coder-mcp \
+  --root /path/to/workspace \
+  --cwd /path/to/workspace
+```
+
+The check initializes the server, lists registered tool names, and calls `read_files` on `README.md`. A successful check means the configured server and stdio transport responded locally; if the client still times out, compare its launch command, arguments, working directory, and Python environment with this invocation, then inspect the client’s server stderr log. The MCP server registers names such as `read_files`; clients may display them with an additional server-name prefix.
 
 ### Workspace paths and tool errors
 
 Use workspace-relative paths, which resolve from the configured `--root`. Path operations are confined to that root. Read and edit responses retain their existing `path` field and include `resolved_path`.
 
-`workspace_find_files` and `code_search_ripgrep` return successful partial results when a workspace directory cannot be scanned. Their `errors` arrays identify skipped workspace-relative paths and explain the filesystem error. Search `path_glob` patterns are used to limit traversal when their directory prefix is statically known.
+`find_files` and `code_search_ripgrep` return successful partial results when a workspace directory cannot be scanned. Their `errors` arrays identify skipped workspace-relative paths and explain the filesystem error. Search `path_glob` patterns are used to limit traversal when their directory prefix is statically known.
 
-Unfiltered `workspace_run_tests` runs require a recognized test setup (for example, pytest configuration or actual test files); a generic `pyproject.toml` alone is not enough. Supplying both a framework and `filter_path` allows a targeted run without workspace-wide test discovery.
+Unfiltered `run_tests` runs require a recognized test setup (for example, pytest configuration or actual test files); a generic `pyproject.toml` alone is not enough. Supplying both a framework and `filter_path` allows a targeted run without workspace-wide test discovery.
 
 `git_manage` discovers Git repositories when first called, so connecting the MCP server does not require scanning the configured workspace. If the configured workspace root is a repository, it reports that root without searching for nested repositories; otherwise it searches descendant directories without following symlinks or entering `.git` metadata. When several repositories are found, pass the listed workspace-relative path as `repo_path` on every action. With one repository, `repo_path` is optional. If none is found, the tool description instructs the agent to warn the user and ask before initializing; `action: "init"` initializes the configured workspace root only when no repository is found, then updates the tool description. `git_manage` reports `git_unavailable`, `not_a_git_repository`, `git_repository_check_failed`, or `repository_discovery_incomplete` in `error_code` for those failure cases.
 
