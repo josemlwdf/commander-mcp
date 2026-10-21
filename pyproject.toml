@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "handy-coder-mcp"
+version = "2.0.0"
+description = "Workspace-confined MCP server for coding agents"
+requires-python = ">=3.11"
+dependencies = ["mcp>=1.2,<2"]
+
+[project.scripts]
+handy-coder-mcp = "handy_coder_mcp:main"
+
+[tool.setuptools]
+py-modules = ["handy_coder_mcp"]
+packages = ["lib"]

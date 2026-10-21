@@ -1,72 +1,40 @@
-# Commander mcp 🛡️
+# Handy Coder MCP 🛡️
 
-A secure, context-confined Model Context Protocol (MCP) server that empowers AI coding agents (in **VS Code**, **Kiro**, Cursor, Claude Desktop, etc.) to execute system commands strictly within the authorized project directory.
+Handy Coder MCP is a Python Model Context Protocol server for coding agents. It exposes workspace file, shell, search, diagnostics, test, and Git tools. File paths and command working directories are confined to the configured root, which is reported in every tool description.
 
----
+## Requirements and installation
 
-## Key Features
+- Python 3.11 or newer
 
-- **Context Confinement & Jailbreak Prevention**:
-  - Automatically restricts execution `cwd` to the authorized directory or validated subdirectories.
-  - Lexical and path inspection blocks out-of-context references (e.g. `../` escapes, `/etc/passwd`, `C:\Windows`, user home directories `~`, `$HOME`, `%USERPROFILE%`).
-  - Redirection target inspection (blocks `> /tmp/out.txt` or `> ../escape.txt`).
-  - Subshell inspection (`$(...)` and backticks).
-  - Returns clear, actionable security warning messages directly to the agent when an attempt is blocked.
-- **Dynamic OS-Aware Agent Guidance**:
-  - Injects runtime environment metadata dynamically into the MCP tool definition (`tools/list`).
-  - Alerts the agent whether it is targeting **Windows** (PowerShell cmdlets, `$env:VAR`, `\`), **Linux** (bash, `/`), or **macOS** (zsh/bash, `/`).
-  - Informs the agent of the exact authorized workspace root and path rules.
-- **Cross-Platform Compatibility**:
-  - Full support for Windows (PowerShell / `cmd.exe`), Linux (`bash`/`sh`), and macOS (`zsh`/`bash`).
-  - Handles Windows drive letters (`C:\`), UNC paths, and case-insensitivity.
-- **Process Protection**:
-  - Configurable timeouts (default: 60s) with clean process tree termination (`taskkill /T /F` on Windows, `SIGTERM`/`SIGKILL` on POSIX).
-  - Non-interactive defaults (`CI=true`, `DEBIAN_FRONTEND=noninteractive`).
-  - Output buffering caps (1 MB limit) to prevent memory exhaustion and client crashes.
+Install from a checkout:
 
----
-
-## Tool Exposed to the Agent
-
-### `execute_command`
-Executes a system shell command strictly confined within the authorized project directory.
-
-- **Parameters**:
-  - `command` *(string, required)*: The shell command to execute.
-  - `subdir` *(string, optional)*: Relative subdirectory inside the workspace to execute the command in.
-  - `timeout_ms` *(number, optional)*: Execution timeout in milliseconds (default: `60000`).
-
----
-
-## Installation & Setup
-
-### Prerequisites
-- Node.js >= 18.0.0
-
-### Option A: Local Build
-Clone or place this repository on your machine:
 ```bash
-git clone <repo-url> commander_mcp
-cd commander_mcp
-npm install
-npm run build
+git clone https://github.com/josemlwdf/handy-coder-mcp.git
+cd handy-coder-mcp
+python -m pip install .
 ```
 
----
+Run against the current directory or select a workspace root:
 
-## IDE & Client Configuration
+```bash
+handy-coder-mcp
+handy-coder-mcp --root /home/user/my-app
+handy-coder-mcp --root /home/user/my-app --shell /bin/bash
+```
 
-### 1. VS Code (Cline / Roo Code / Claude Dev)
+`HANDY_CODER_ROOT` can provide the root when `--root` is omitted. `COMMANDER_ROOT` remains supported as a legacy fallback. `--shell` retains the shell override behavior. The server runs `pwd` from the configured root at startup and includes that result in all tool descriptions; startup stops with a clear error if `pwd` fails.
 
-Add to your MCP settings file (`claude_desktop_config.json` or Cline's `settings.json`):
+## MCP client configuration
+
+For VS Code, Kiro, Cursor, Claude Desktop, and other stdio MCP clients, point the server at the installed Python module or checkout:
 
 ```json
 {
   "mcpServers": {
-    "commander": {
-      "command": "node",
+    "handy-coder-mcp": {
+      "command": "python",
       "args": [
-        "/path/to/commander_mcp/dist/index.js",
+        "/path/to/handy-coder-mcp/handy_coder_mcp.py",
         "--root",
         "${workspaceFolder}"
       ]
@@ -75,111 +43,26 @@ Add to your MCP settings file (`claude_desktop_config.json` or Cline's `settings
 }
 ```
 
-#### Windows Example (VS Code / Cline):
+Alternatively, use the installed entry point:
+
 ```json
 {
   "mcpServers": {
-    "commander": {
-      "command": "node",
-      "args": [
-        "C:\\tools\\commander_mcp\\dist\\index.js",
-        "--root",
-        "${workspaceFolder}"
-      ]
+    "handy-coder-mcp": {
+      "command": "handy-coder-mcp",
+      "args": ["--root", "${workspaceFolder}"]
     }
   }
 }
 ```
 
----
+The server exposes `workspace_read_files`, `workspace_apply_edits`, `terminal_exec`, `code_search_ripgrep`, `workspace_find_files`, `code_get_diagnostics`, `workspace_run_tests`, and `git_manage`.
 
-### 2. Kiro AI Editor
+## Security and limits
 
-In Kiro's MCP configuration (`.kiro/mcp.json` or Settings > MCP):
+- `--root` is the authorization boundary. File paths, read/write targets, and command working directories must resolve inside it; symlink escapes are rejected.
+- Shell execution rejects recognizable path escapes, home-directory references, and redirection targets outside the root. As with any shell interface, do not expose this server to untrusted clients.
+- File reads are capped at 2 MiB per file. Process output is capped at 1 MiB per stream and command timeouts are bounded to ten minutes (30 seconds by default).
+- Use relative paths inside the workspace. Commands such as `npm test`, `git status`, `ls`, and `python scripts/build.py` run with the workspace as their default directory.
 
-```json
-{
-  "mcpServers": {
-    "commander": {
-      "command": "node",
-      "args": [
-        "/path/to/commander_mcp/dist/index.js",
-        "--root",
-        "${workspaceFolder}"
-      ]
-    }
-  }
-}
-```
-
----
-
-### 3. Global / Direct CLI Usage
-
-You can also run Commander mcp directly against any folder:
-
-```bash
-# Run confined to current directory:
-commander-mcp
-
-# Run confined to a specific project root:
-commander-mcp --root /home/user/my-app
-
-# Run with custom shell override:
-commander-mcp --root /home/user/my-app --shell /bin/bash
-```
-
----
-
-## Security Behavior Examples
-
-### Allowed Commands
-- `npm test`
-- `git status`
-- `ls -la` / `dir`
-- `cat src/index.ts`
-- `python scripts/build.py`
-- `echo "sample" > ./test.txt`
-
-### Blocked Commands (Agent receives corrective alert)
-| Command | Reason Blocked |
-|---|---|
-| `cat /etc/passwd` | Absolute path outside workspace root |
-| `type C:\Windows\System32\drivers\etc\hosts` | Absolute Windows system path outside workspace root |
-| `cat ../secret.txt` | Path traversal escapes workspace root |
-| `echo "leak" > /tmp/out.txt` | Redirection target points outside workspace root |
-| `cat ~/.ssh/id_rsa` | Home directory escape outside workspace root |
-| `echo $(cat /etc/shadow)` | Subshell command accesses out-of-context file |
-| `dir %USERPROFILE%` | Environment variable points outside workspace root |
-
-When a blocked command is received, the tool responds with:
-```
-[SECURITY ALERT - COMMAND BLOCKED]
-The command was rejected because it attempts to access files or directories outside your authorized context.
-Authorized Workspace Root: /path/to/project
-Current Effective Directory: /path/to/project
-Detected Security Violations:
-  - Path argument '/etc/passwd' points outside the authorized workspace root.
-
-Remediation:
-  - Do not use parent directory traversals ('../') that leave the workspace.
-  - Do not reference absolute paths like '/etc', '/var', '/tmp', 'C:\Windows', or user homes ('~').
-  - Keep all file reads, writes, and script targets strictly relative to or inside '/path/to/project'.
-```
-
----
-
-## Testing
-
-Run the automated test suite:
-```bash
-npm test
-```
-
-This verifies:
-- POSIX & Windows path confinement algorithms
-- Subshell and redirection breakout detection
-- Environment variable sanitization
-- Process runner timeout & exit code capture
-- End-to-end MCP client/server JSON-RPC communication
-
+`terminal_exec` and `git_manage` can modify the workspace. Review changes with `git_manage` actions `status` and `diff` before committing. No tool pushes commits to a remote.
