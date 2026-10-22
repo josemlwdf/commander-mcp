@@ -127,6 +127,7 @@ def _tool_description() -> str:
         "Run a validated workspace Git action: status, diff, log, commit, checkout, or init. "
         "Pass action-specific Git options as separate strings in args. "
         f"{state} Use workspace-relative repo_path when selecting a repository. "
+        "When repo_path is given and has a .git marker, workspace scan is bypassed for faster execution. "
         "When to use: Review or manage local changes."
     )
 
@@ -187,7 +188,7 @@ def git_manage(
         Field(description=(
             "Git operation to run. status and init take no args; diff and log accept "
             "validated options; commit requires -m and a message; checkout requires "
-            "one branch or ref. init initializes the configured workspace root."
+            "one branch or ref. init initializes the workspace root or a repo_path subdirectory."
         )),
     ],
     args: Annotated[
@@ -227,7 +228,15 @@ def git_manage(
         and not arg.isdigit()
         for arg in args
     ):
-        raise ValueError("Unsupported log option")
+        bad = next(
+            arg for arg in args
+            if arg.startswith("-") and arg not in ("-n", "--oneline", "--decorate", "--all", "--")
+            and not arg.isdigit()
+        )
+        raise ValueError(
+            f"Unsupported log option: '{bad}'. "
+            "Allowed flags: -n <count>, --oneline, --decorate, --all, --"
+        )
     if action == "commit":
         if not args or "-m" not in args or args.count("-m") != 1 or args.index("-m") == len(args) - 1:
             raise ValueError("commit requires -m followed by a commit message")
@@ -256,7 +265,13 @@ def git_manage(
 
     if action == "init":
         if repo_path:
-            raise ValueError("init always initializes the configured workspace root; omit repo_path")
+            # Allow init in a specific subdirectory instead of always using workspace root.
+            init_path = inside(repo_path)
+            init_path.mkdir(parents=True, exist_ok=True)
+            if not init_path.is_dir():
+                raise ValueError(f"repo_path for init must be a directory: {repo_path}")
+        else:
+            init_path = inside(".")
         _refresh_inventory(target_mcp, force=True)
         if _DISCOVERY_ERRORS:
             return {
@@ -267,36 +282,47 @@ def git_manage(
             }
         if _REPOSITORIES:
             raise ValueError("A Git repository is already available; init is only allowed when none are found")
-        root = inside(".")
-        result = run_process([git, "init"], cwd=root)
+        result = run_process([git, "init"], cwd=init_path)
         if result["exit_code"] == 0:
             new_repositories, new_errors = discover_repositories()
             _set_inventory(new_repositories, new_errors)
             _update_tool_description(target_mcp, _tool_description())
         return result
 
-    if _REPOSITORIES is None or _DISCOVERY_ROOT != inside("."):
-        _refresh_inventory(target_mcp)
-    if _DISCOVERY_ERRORS and not _REPOSITORIES:
-        return {
-            "supported": True,
-            "error_code": "repository_discovery_incomplete",
-            "message": "Cannot select a Git repository because workspace discovery was incomplete.",
-            "exit_code": 1,
-        }
-
+    # Fast path: when repo_path is explicitly given and a .git marker exists there,
+    # bypass the potentially slow workspace-wide discovery scan entirely.
     if repo_path:
         requested_path = Path(repo_path)
         if requested_path.is_absolute():
             raise ValueError("repo_path must be relative to the configured workspace")
         selected_path = inside(repo_path, must_exist=True)
         relative_path = selected_path.relative_to(inside(".")).as_posix() or "."
-        if relative_path not in _REPOSITORIES:
-            raise ValueError(
-                "repo_path must match one of the discovered repository paths: "
-                + ", ".join(_REPOSITORIES)
-            )
+        if _git_marker(selected_path):
+            # .git confirmed — skip discovery, proceed directly to git call.
+            pass
+        else:
+            # No .git marker — fall back to discovery for a meaningful error.
+            if _REPOSITORIES is None or _DISCOVERY_ROOT != inside("."):
+                _refresh_inventory(target_mcp)
+            if relative_path not in (_REPOSITORIES or ()):
+                _refresh_inventory(target_mcp, force=True)
+                if relative_path not in (_REPOSITORIES or ()):
+                    raise ValueError(
+                        f"'{relative_path}' is not a recognised Git repository. "
+                        "Discovered repositories: "
+                        + (", ".join(f"'{p}'" for p in (_REPOSITORIES or ())) or "(none)")
+                    )
     else:
+        # No repo_path — must run discovery to select the right repo.
+        if _REPOSITORIES is None or _DISCOVERY_ROOT != inside("."):
+            _refresh_inventory(target_mcp)
+        if _DISCOVERY_ERRORS and not _REPOSITORIES:
+            return {
+                "supported": True,
+                "error_code": "repository_discovery_incomplete",
+                "message": "Cannot select a Git repository because workspace discovery was incomplete.",
+                "exit_code": 1,
+            }
         if len(_REPOSITORIES) > 1:
             raise ValueError(
                 "repo_path is required when multiple repositories are available: "

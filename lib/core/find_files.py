@@ -14,6 +14,23 @@ _DEFAULT_EXCLUDE_DIRS = frozenset({
 MAX_RESULTS = 5000
 
 
+def _globstar_match(relative_path: str, pattern: str) -> bool:
+    """Return True when a pattern containing ** also matches with zero intermediate directories.
+
+    ``src/**/*.py`` should match ``src/foo.py`` (zero intermediate dirs) in
+    addition to ``src/sub/foo.py`` (one or more).  fnmatch alone won't do
+    this because ``**`` is not a special wildcard in fnmatch — it just means
+    "any two characters".  We handle the zero-dir case by stripping each
+    ``**/`` segment and re-testing.
+    """
+    if "**" not in pattern:
+        return False
+    # Collapse every "**/" away to check the zero-intermediate-dir case.
+    collapsed = pattern.replace("**/", "")
+    name = relative_path.rsplit("/", 1)[-1]
+    return fnmatch.fnmatch(relative_path, collapsed) or fnmatch.fnmatch(name, collapsed)
+
+
 def find_files(
     glob_pattern: Annotated[str, Field(description="Non-empty glob pattern matched against workspace-relative paths and file names.")],
     exclude_pattern: Annotated[str | None, Field(description="Optional glob pattern to exclude matching workspace-relative paths.")] = None,
@@ -31,7 +48,10 @@ def find_files(
             incomplete = True
             errors.append({
                 "path": ".",
-                "message": "File discovery timed out after 15s; results are partial",
+                "message": (
+                    "File discovery timed out after 15 s; results are partial. "
+                    "Use a more specific glob_pattern or a scoped path prefix to reduce the search space."
+                ),
             })
             break
         # Skip default-excluded dirs unless include_generated
@@ -43,6 +63,7 @@ def find_files(
         if not (
             fnmatch.fnmatch(relative_path, glob_pattern)
             or fnmatch.fnmatch(name, glob_pattern)
+            or _globstar_match(relative_path, glob_pattern)
         ):
             continue
         if exclude_pattern and fnmatch.fnmatch(relative_path, exclude_pattern):
@@ -57,7 +78,8 @@ def find_files(
 def register(mcp):
     return mcp.tool(description=describe(
         "Find workspace files by glob, optionally excluding matches. "
-        f"Generated and build directories ({', '.join(sorted(_DEFAULT_EXCLUDE_DIRS))}) are excluded by default. "
+        "The .git directory is always excluded. "
+        f"Generated and build directories ({', '.join(sorted(_DEFAULT_EXCLUDE_DIRS))}) are excluded by default unless include_generated is true. "
         f"Returns at most {MAX_RESULTS} results; incomplete is true when the limit was reached. "
         "Scan failures are returned in errors with any partial matches. "
         "When to use: Discover file paths."

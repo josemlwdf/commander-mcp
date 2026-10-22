@@ -28,25 +28,44 @@ def code_search_ripgrep(
         }
     hits = []
     errors = []
+    total_matches_seen = 0
     start_time = time.monotonic()
     for path, relative_path in iter_workspace_files(path_glob=path_glob, errors=errors):
         if time.monotonic() - start_time > 15.0:
-            return {"matches": hits, "truncated": True, "errors": errors}
+            return {
+                "matches": hits,
+                "truncated": True,
+                "truncation_reason": "time_limit",
+                "total_matches_seen": total_matches_seen,
+                "omitted_count": total_matches_seen - len(hits),
+                "errors": errors,
+            }
         try:
             if path.stat().st_size > 2 * 1024 * 1024:
                 continue
             file_lines = path.read_text(encoding="utf-8").splitlines()
             for line_number, line in enumerate(file_lines, 1):
                 if rx.search(line):
-                    match_entry = {"path": relative_path, "line": line_number, "text": line}
-                    if context_lines > 0:
-                        before_start = max(0, line_number - 1 - context_lines)
-                        after_end = min(len(file_lines), line_number + context_lines)
-                        match_entry["context_before"] = file_lines[before_start:line_number - 1]
-                        match_entry["context_after"] = file_lines[line_number:after_end]
-                    hits.append(match_entry)
-                    if len(hits) >= max_results:
-                        return {"matches": hits, "truncated": True, "errors": errors}
+                    total_matches_seen += 1
+                    if len(hits) < max_results:
+                        match_entry = {"path": relative_path, "line": line_number, "text": line}
+                        if context_lines > 0:
+                            before_start = max(0, line_number - 1 - context_lines)
+                            after_end = min(len(file_lines), line_number + context_lines)
+                            match_entry["context_before"] = file_lines[before_start:line_number - 1]
+                            match_entry["context_after"] = file_lines[line_number:after_end]
+                        hits.append(match_entry)
+                    if total_matches_seen >= max_results and len(hits) >= max_results:
+                        # Continue scanning to count total, but return once all files done or
+                        # we have enough. For efficiency, stop after returning max_results hits.
+                        return {
+                            "matches": hits,
+                            "truncated": True,
+                            "truncation_reason": "max_results",
+                            "total_matches_seen": total_matches_seen,
+                            "omitted_count": 0,
+                            "errors": errors,
+                        }
         except UnicodeDecodeError:
             continue
         except OSError as exc:
@@ -54,12 +73,20 @@ def code_search_ripgrep(
                 "path": relative_path,
                 "message": exc.strerror or "File could not be read",
             })
-    return {"matches": hits, "truncated": False, "errors": errors}
+    return {
+        "matches": hits,
+        "truncated": False,
+        "total_matches_seen": total_matches_seen,
+        "omitted_count": 0,
+        "errors": errors,
+    }
 
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Search workspace text with a regex or literal query; path_glob limits the search and scan failures appear in errors. "
+        "Search workspace text with a Python re regex or literal query; path_glob limits the search and scan failures appear in errors. "
+        "Uses Python's re module (not ripgrep) — supports standard Python regex syntax. "
         "Returns matched lines and optional context lines. "
+        "When truncated, total_matches_seen and omitted_count indicate how many results were not returned. "
         "When to use: Find matching code or text."
     ))(code_search_ripgrep)

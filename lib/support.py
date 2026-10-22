@@ -22,6 +22,33 @@ def configure(root: str, shell: str | None = None) -> None:
     WORKING_DIRECTORY = ROOT
     if not WORKING_DIRECTORY: raise RuntimeError(f"'pwd' returned no working directory for {ROOT}")
     if shell: SHELL = shell
+    # Warn when the workspace root is a home directory or drive root — scanning
+    # these trees often causes timeouts in large environments.
+    _warn_high_risk_root(ROOT)
+
+
+def _warn_high_risk_root(root: Path) -> None:
+    """Emit a startup warning when the workspace is a home dir or drive root."""
+    import sys
+    # Check for drive/filesystem root (e.g. / or C:\)
+    if root == root.parent:
+        print(
+            f"[handy-coder-mcp] WARNING: workspace root is a filesystem root ({root}). "
+            "Workspace-wide scans may time out. Narrow the workspace with --root.",
+            file=sys.stderr,
+        )
+        return
+    # Check for home directory
+    try:
+        home = Path.home().resolve()
+        if root == home:
+            print(
+                f"[handy-coder-mcp] WARNING: workspace root is the user home directory ({root}). "
+                "Workspace-wide scans may time out. Narrow the workspace with --root.",
+                file=sys.stderr,
+            )
+    except RuntimeError:
+        pass
 
 def inside(path: str | Path, *, must_exist: bool = False) -> Path:
     raw = Path(path).expanduser()
@@ -91,7 +118,13 @@ def iter_workspace_files(
                     })
                     continue
                 if path_glob and not fnmatch.fnmatch(relative_path, path_glob):
-                    continue
+                    # When the pattern uses **, also accept files that match with
+                    # zero intermediate directories (e.g. src/**/*.py → src/foo.py).
+                    if "**" not in path_glob:
+                        continue
+                    collapsed = path_glob.replace("**/", "")
+                    if not fnmatch.fnmatch(relative_path, collapsed):
+                        continue
                 yield resolved, relative_path
             except OSError as exc:
                 scan_errors.append({
@@ -187,6 +220,11 @@ def validate_shell_command(command: str, cwd: Path) -> None:
             except ValueError: raise ValueError(f"Redirection target escapes authorized workspace: {target}")
     try: tokens=shlex.split(command, posix=os.name != "nt")
     except ValueError: raise ValueError("Malformed shell command")
+
+    # Build a set of tokens that appear inside quotes in the raw command.
+    # These are user-supplied string literals, not path candidates.
+    _quoted_tokens = _extract_quoted_tokens(command)
+
     redir=False
     for token in tokens:
         if token in (">",">>","<","2>","1>","&>",">|"):
@@ -195,10 +233,28 @@ def validate_shell_command(command: str, cwd: Path) -> None:
         if token.startswith("-") and "=" in token: token=token.split("=",1)[1]
         candidate=token
         if redir or candidate.startswith(("./","../","/","~/","\\\\")) or re.match(r"^[A-Za-z]:[\\/]",candidate):
+            # A lone "/" is the division operator, not a path — don't reject it.
+            if candidate == "/":
+                redir = False
+                continue
+            # Tokens that were originally inside quotes are string literals, not paths.
+            if candidate in _quoted_tokens:
+                redir = False
+                continue
             if candidate.startswith("~"): raise ValueError("Home-directory path escapes the workspace")
             try: inside(candidate if Path(candidate).is_absolute() else cwd / candidate)
-            except ValueError: raise ValueError(f"Command path escapes authorized workspace: {candidate}")
+            except ValueError: raise ValueError(f"Command token '{candidate}' looks like a path outside the authorized workspace. If this is not a path (e.g. a division operator), rewrite the command to avoid ambiguity.")
         redir=False
+
+
+def _extract_quoted_tokens(command: str) -> frozenset[str]:
+    """Return the set of string values that appeared inside single or double quotes."""
+    quoted: set[str] = set()
+    # Match single-quoted or double-quoted substrings in the raw command.
+    for m in re.finditer(r"'([^']*)'|\"([^\"]*)\"", command):
+        inner = m.group(1) if m.group(1) is not None else m.group(2)
+        quoted.add(inner)
+    return frozenset(quoted)
 
 def result_text(value: object) -> str:
     if isinstance(value, str): return value

@@ -43,14 +43,38 @@ def code_get_diagnostics(
                 "(looked for package scripts, Ruff/mypy configuration, and Makefile check/lint/typecheck/validate targets)."
             ),
         }
-    name, cmd = candidates[0]
-    res = run_process(cmd, cwd=base)
-    return {"supported": True, "check": name, **res}
+    # Try each candidate in order, skipping tools that are not installed.
+    for name, cmd in candidates:
+        res = run_process(cmd, cwd=base)
+        # Distinguish "tool not installed" from "tool ran and reported findings".
+        if res["exit_code"] != 0 and res.get("stderr", "").startswith("Failed to start process:"):
+            # Try the next candidate; if this is the last one, return the error.
+            if (name, cmd) == candidates[-1]:
+                return {
+                    "supported": True,
+                    "check": name,
+                    "error_code": "tool_not_installed",
+                    "ok": False,
+                    "message": (
+                        f"The '{name}' tool is configured but could not be started. "
+                        "Install it and try again."
+                    ),
+                    **res,
+                }
+            continue
+        ok = res["exit_code"] == 0
+        return {"supported": True, "check": name, "ok": ok, **res}
+    # Unreachable but satisfies type checkers.
+    return {"supported": False, "message": "No diagnostic tool could be run."}
 
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Detect and run the first configured package, Python, or Makefile diagnostic in the selected workspace directory. "
-        "Returns the recipe name, exit code, stdout, stderr, and duration. "
+        "Detect and run the first available diagnostic tool in the selected workspace directory. "
+        "Detection order: package.json scripts (typecheck > check > lint), "
+        "pyproject.toml tools (ruff > mypy), then Makefile targets (check > lint > typecheck > validate). "
+        "Returns the check name, ok (true when exit_code is 0), exit code, stdout, stderr, and duration. "
+        "Returns error_code='tool_not_installed' when the configured tool binary cannot be started; "
+        "falls back to the next available candidate automatically. "
         "When to use: Check project health."
     ))(code_get_diagnostics)

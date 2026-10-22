@@ -82,21 +82,47 @@ def _detect_framework(root) -> str | None:
     return None
 
 def _parse_pytest_output(stdout: str) -> dict | None:
-    """Extract summary counts from pytest terminal output."""
+    """Extract summary counts and per-test failure identifiers from pytest terminal output.
+
+    Handles any ordering of counts, e.g.:
+      "1 failed, 3 passed, 2 warnings in 0.3s"
+      "1 failed in 0.13s"
+      "5 passed in 0.1s"
+
+    Also extracts individual FAILED lines such as:
+      "FAILED test/test_foo.py::TestClass::test_method - AssertionError: ..."
+    """
     import re
-    # Look for lines like: "5 passed, 2 failed, 1 error in 0.5s"
-    pattern = re.search(
-        r'(\d+) passed(?:,\s*(\d+) failed)?(?:,\s*(\d+) error)?(?:,\s*(\d+) warning)?',
-        stdout
-    )
-    if not pattern:
+    # Confirm there is a summary line at all before allocating counts.
+    if not re.search(r'\d+\s+(?:passed|failed|error)', stdout):
         return None
-    return {
-        "passed": int(pattern.group(1) or 0),
-        "failed": int(pattern.group(2) or 0),
-        "errors": int(pattern.group(3) or 0),
-        "warnings": int(pattern.group(4) or 0),
-    }
+    counts: dict[str, int] = {"passed": 0, "failed": 0, "errors": 0, "warnings": 0}
+    for m in re.finditer(r'(\d+)\s+(passed|failed|errors?|warnings?)', stdout):
+        key = m.group(2).rstrip("s")   # normalise plural: "errors" -> "error"
+        if key == "error":
+            key = "errors"
+        if key == "warning":
+            key = "warnings"
+        if key in counts:
+            counts[key] = int(m.group(1))
+
+    # Extract individual FAILED test identifiers.
+    failures = []
+    for m in re.finditer(r'^FAILED\s+([\w/\\.\-]+::[\w:.\-]+)(?: - (.*))?$', stdout, re.MULTILINE):
+        test_id = m.group(1).strip()
+        message = (m.group(2) or "").strip()
+        parts = test_id.split("::", 1)
+        entry: dict = {"test_id": test_id}
+        if len(parts) == 2:
+            entry["file"] = parts[0]
+        if message:
+            entry["message"] = message
+        failures.append(entry)
+
+    result = dict(counts)
+    if failures:
+        result["failures"] = failures
+    return result
 
 
 def run_tests(
@@ -146,6 +172,7 @@ def register(mcp):
     return mcp.tool(description=describe(
         "Run configured Jest, Vitest, or pytest tests; unfiltered runs require recognized test setup. "
         "filter_path is workspace-confined; when it points to test files, discovery is skipped. "
-        "Returns parsed summary counts when available. "
+        "Returns parsed summary counts when available; for pytest, also returns failures list with "
+        "test_id, file, and message fields for each failed test. "
         "When to use: Execute project tests."
     ))(run_tests)

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from lib import support
 from lib.core import apply_edits, code_search, find_files, git_manage, read_files, run_tests
-from lib.core import diagnostics
+from lib.core import diagnostics, terminal_exec
 from lib.extras import web_fetch
 
 
@@ -33,7 +33,7 @@ class CoreFeedbackTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name).resolve()
         support.configure(str(self.root))
         self.mcp = FakeMCP()
-        for module in (apply_edits, code_search, find_files, git_manage, read_files, run_tests, diagnostics):
+        for module in (apply_edits, code_search, find_files, git_manage, read_files, run_tests, diagnostics, terminal_exec):
             module.register(self.mcp)
 
     def tearDown(self):
@@ -91,10 +91,12 @@ class CoreFeedbackTests(unittest.TestCase):
             path=str(file_path), old_str="old", new_str="new"
         )])
 
+        # read_files: relative path is always present; no host-leaking resolved_path.
         self.assertEqual(read_result["files"][0]["path"], "sample.txt")
-        self.assertEqual(read_result["files"][0]["resolved_path"], str(file_path))
+        self.assertNotIn("resolved_path", read_result["files"][0],
+                         "resolved_path must not be exposed (security: leaks host paths)")
+        # apply_edits: the path echoed back is the caller-supplied value.
         self.assertEqual(edit_result["edits"][0]["path"], str(file_path))
-        self.assertEqual(edit_result["edits"][0]["resolved_path"], str(file_path))
         self.assertIn("Use relative paths.", self.mcp.descriptions["read_files"])
 
     def test_generic_pyproject_does_not_trigger_unfiltered_pytest(self):
@@ -415,6 +417,367 @@ class CoreFeedbackTests(unittest.TestCase):
 
         self.assertEqual(result["http_status"], 200)
         self.assertIn("truncated", result)
+
+    # ------------------------------------------------------------------
+    # Audit fix tests
+    # ------------------------------------------------------------------
+
+    def test_run_tests_parser_failures_only_line(self):
+        """'1 failed in 0.13s' must produce parsed.failed=1, parsed.passed=0."""
+        result = run_tests._parse_pytest_output("1 failed in 0.13s")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["passed"], 0)
+
+    def test_run_tests_parser_reversed_order(self):
+        """'1 failed, 3 passed' (failed before passed) must give correct counts."""
+        result = run_tests._parse_pytest_output("1 failed, 3 passed in 0.3s")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["passed"], 3)
+
+    def test_run_tests_parser_no_summary_returns_none(self):
+        """Output with no recognisable summary line must return None."""
+        self.assertIsNone(run_tests._parse_pytest_output("collected 0 items"))
+
+    def test_git_manage_rediscovers_newly_created_repo(self):
+        """A repo created after the first git_manage call must be accepted."""
+        # First call populates the cache with an empty repo list.
+        with patch("lib.core.git_manage.shutil.which", return_value=None):
+            self.mcp.tools["git_manage"]("status")
+
+        # Now create a repo under the workspace.
+        repo = self.root / "project"
+        (repo / ".git").mkdir(parents=True)
+
+        ok_result = {
+            "stdout": "true", "stderr": "", "exit_code": 0,
+            "timed_out": False, "duration_ms": 1,
+        }
+        with (
+            patch("lib.core.git_manage.shutil.which", return_value="/usr/bin/git"),
+            patch("lib.core.git_manage.run_process", return_value=ok_result),
+        ):
+            result = self.mcp.tools["git_manage"]("status", repo_path="project")
+
+        # Should succeed (re-discovered the new repo), not raise ValueError.
+        self.assertNotIn("error_code", result)
+
+    def test_git_manage_log_error_names_the_flag(self):
+        """Unsupported log option error must name the offending flag."""
+        (self.root / ".git").mkdir()
+        mcp = FakeMCP()
+        git_manage.register(mcp)
+        ok_result = {
+            "stdout": "true", "stderr": "", "exit_code": 0,
+            "timed_out": False, "duration_ms": 1,
+        }
+        with (
+            patch("lib.core.git_manage.shutil.which", return_value="/usr/bin/git"),
+            patch("lib.core.git_manage.run_process", return_value=ok_result),
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                mcp.tools["git_manage"]("log", args=["--format=%H"])
+        self.assertIn("--format=%H", str(ctx.exception))
+        self.assertIn("Allowed", str(ctx.exception))
+
+    def test_read_files_returns_per_file_errors_for_missing_files(self):
+        """A missing file must appear in errors; valid files must still appear in files."""
+        good = self.root / "good.txt"
+        good.write_text("hello\n", encoding="utf-8")
+
+        result = self.mcp.tools["read_files"](["good.txt", "missing.txt"])
+
+        file_paths = [f["path"] for f in result["files"]]
+        error_paths = [e["path"] for e in result["errors"]]
+        self.assertIn("good.txt", file_paths)
+        self.assertIn("missing.txt", error_paths)
+
+    def test_read_files_all_missing_returns_empty_files_and_non_empty_errors(self):
+        """All-missing batch produces files=[] and non-empty errors."""
+        result = self.mcp.tools["read_files"](["nope1.txt", "nope2.txt"])
+        self.assertEqual(result["files"], [])
+        self.assertEqual(len(result["errors"]), 2)
+
+    def test_terminal_exec_division_operator_not_rejected(self):
+        """A shell command containing bare '/' (division) must not be rejected."""
+        from lib.support import validate_shell_command
+        # Should not raise — '/' is the division operator here, not a path.
+        validate_shell_command("echo $((10 / 2))", self.root)
+
+    def test_terminal_exec_error_message_names_bad_token(self):
+        """The path-guard error message must include the rejected token."""
+        from lib.support import validate_shell_command
+        with self.assertRaises(ValueError) as ctx:
+            validate_shell_command("cat /etc/passwd", self.root)
+        self.assertIn("/etc/passwd", str(ctx.exception))
+
+    def test_code_search_truncation_reason_max_results(self):
+        """Hitting max_results must set truncation_reason='max_results'."""
+        for i in range(5):
+            (self.root / f"f{i}.txt").write_text("needle\n", encoding="utf-8")
+
+        result = self.mcp.tools["code_search_ripgrep"]("needle", max_results=3)
+
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result.get("truncation_reason"), "max_results")
+
+    def test_code_search_truncation_reason_time_limit(self):
+        """A time-limit truncation must set truncation_reason='time_limit'."""
+        import time as _time
+        (self.root / "f.txt").write_text("needle\n", encoding="utf-8")
+
+        call_count = [0]
+        real_monotonic = _time.monotonic
+
+        def fake_monotonic():
+            call_count[0] += 1
+            # After the first call (start_time) always return a value far in
+            # the future so the 15 s guard fires immediately.
+            if call_count[0] > 1:
+                return real_monotonic() + 100.0
+            return real_monotonic()
+
+        with patch("lib.core.code_search.time.monotonic", side_effect=fake_monotonic):
+            result = self.mcp.tools["code_search_ripgrep"]("needle")
+
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result.get("truncation_reason"), "time_limit")
+
+    def test_find_files_globstar_matches_zero_intermediate_dirs(self):
+        """src/**/*.py must match src/foo.py (zero intermediate directories)."""
+        src = self.root / "src"
+        src.mkdir()
+        (src / "foo.py").write_text("x", encoding="utf-8")
+        (src / "sub").mkdir()
+        (src / "sub" / "bar.py").write_text("x", encoding="utf-8")
+
+        result = self.mcp.tools["find_files"]("src/**/*.py")
+
+        files = result["files"]
+        self.assertIn("src/foo.py", files, "zero-dir case not matched")
+        self.assertIn("src/sub/bar.py", files, "one-dir case not matched")
+
+    def test_diagnostics_tool_not_installed_error_code(self):
+        """When the tool binary cannot start, error_code='tool_not_installed' is returned."""
+        (self.root / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 88\n", encoding="utf-8"
+        )
+        process_result = {
+            "stdout": "",
+            "stderr": "Failed to start process: [Errno 2] No such file or directory: 'ruff'",
+            "exit_code": 1,
+            "timed_out": False,
+            "duration_ms": 1,
+        }
+
+        with patch("lib.core.diagnostics.run_process", return_value=process_result):
+            result = self.mcp.tools["code_get_diagnostics"]()
+
+        self.assertTrue(result["supported"])
+        self.assertEqual(result.get("error_code"), "tool_not_installed")
+
+    # ------------------------------------------------------------------
+    # Remediation tests (audit fixes round 2)
+    # ------------------------------------------------------------------
+
+    def test_read_files_binary_file_returns_per_file_error_code(self):
+        """A non-UTF-8 file must produce error_code='binary_file' and not crash the batch."""
+        good = self.root / "good.txt"
+        good.write_text("hello\n", encoding="utf-8")
+        bad = self.root / "bad.bin"
+        bad.write_bytes(b"\xff\xfe binary junk \x00\x01")
+
+        result = self.mcp.tools["read_files"](["good.txt", "bad.bin"])
+
+        file_paths = [f["path"] for f in result["files"]]
+        self.assertIn("good.txt", file_paths)
+        error_codes = {e["path"]: e.get("error_code") for e in result["errors"]}
+        self.assertIn("bad.bin", error_codes)
+        self.assertEqual(error_codes["bad.bin"], "binary_file")
+
+    def test_apply_edits_error_includes_edit_index(self):
+        """ValueError for a failed edit must mention the zero-based [edit N] index."""
+        f = self.root / "target.txt"
+        f.write_text("hello world\n", encoding="utf-8")
+
+        with self.assertRaises(ValueError) as ctx:
+            self.mcp.tools["apply_edits"]([
+                apply_edits.Edit(path="target.txt", old_str="hello", new_str="hi"),
+                apply_edits.Edit(path="target.txt", old_str="NOPE", new_str="x"),
+            ])
+        self.assertIn("[edit 1]", str(ctx.exception))
+
+    def test_apply_edits_returns_match_count(self):
+        """Each result entry must include matches with the replacement count."""
+        f = self.root / "multi.txt"
+        f.write_text("a a a\n", encoding="utf-8")
+
+        result = self.mcp.tools["apply_edits"](
+            [apply_edits.Edit(path="multi.txt", old_str="a", new_str="b")],
+            replace_all=True,
+        )
+        self.assertEqual(result["edits"][0]["matches"], 3)
+
+    def test_apply_edits_dry_run_does_not_write(self):
+        """dry_run=True must compute diffs but leave the file unchanged."""
+        f = self.root / "dry.txt"
+        f.write_text("original\n", encoding="utf-8")
+
+        result = self.mcp.tools["apply_edits"](
+            [apply_edits.Edit(path="dry.txt", old_str="original", new_str="changed")],
+            dry_run=True,
+        )
+        self.assertTrue(result["dry_run"])
+        self.assertIn("diff", result["edits"][0])
+        self.assertEqual(f.read_text(encoding="utf-8"), "original\n")
+
+    def test_apply_edits_dry_run_false_writes(self):
+        """dry_run=False (default) must write changes to disk."""
+        f = self.root / "write.txt"
+        f.write_text("before\n", encoding="utf-8")
+
+        self.mcp.tools["apply_edits"](
+            [apply_edits.Edit(path="write.txt", old_str="before", new_str="after")],
+        )
+        self.assertEqual(f.read_text(encoding="utf-8"), "after\n")
+
+    def test_terminal_exec_quoted_slash_not_rejected(self):
+        """A token like '// comment' inside quotes must not trigger the path guard."""
+        from lib.support import validate_shell_command
+        validate_shell_command('echo "// changed by script"', self.root)
+
+    def test_code_search_total_matches_seen_on_truncation(self):
+        """When truncated by max_results, total_matches_seen must be populated."""
+        for i in range(10):
+            (self.root / f"f{i}.txt").write_text("needle\n", encoding="utf-8")
+
+        result = self.mcp.tools["code_search_ripgrep"]("needle", max_results=3)
+
+        self.assertTrue(result["truncated"])
+        self.assertIn("total_matches_seen", result)
+        self.assertGreaterEqual(result["total_matches_seen"], 3)
+        self.assertIn("omitted_count", result)
+
+    def test_code_search_no_truncation_has_total_matches(self):
+        """Non-truncated results must still include total_matches_seen=len(matches)."""
+        (self.root / "one.txt").write_text("needle\n", encoding="utf-8")
+
+        result = self.mcp.tools["code_search_ripgrep"]("needle", max_results=100)
+
+        self.assertFalse(result["truncated"])
+        self.assertEqual(result["total_matches_seen"], len(result["matches"]))
+
+    def test_diagnostics_ok_field_true_on_success(self):
+        """ok must be True when exit_code is 0."""
+        (self.root / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 88\n", encoding="utf-8"
+        )
+        process_result = {
+            "stdout": "", "stderr": "", "exit_code": 0,
+            "timed_out": False, "duration_ms": 10,
+        }
+        with patch("lib.core.diagnostics.run_process", return_value=process_result):
+            result = self.mcp.tools["code_get_diagnostics"]()
+        self.assertTrue(result["ok"])
+
+    def test_diagnostics_ok_field_false_on_failure(self):
+        """ok must be False when exit_code is non-zero."""
+        (self.root / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 88\n", encoding="utf-8"
+        )
+        process_result = {
+            "stdout": "E501 line too long", "stderr": "", "exit_code": 1,
+            "timed_out": False, "duration_ms": 10,
+        }
+        with patch("lib.core.diagnostics.run_process", return_value=process_result):
+            result = self.mcp.tools["code_get_diagnostics"]()
+        self.assertFalse(result["ok"])
+
+    def test_diagnostics_falls_back_to_next_candidate_on_tool_not_installed(self):
+        """When the first tool is not installed, the next candidate must be tried."""
+        (self.root / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 88\n[tool.mypy]\nstrict = true\n",
+            encoding="utf-8",
+        )
+        ruff_missing = {
+            "stdout": "", "exit_code": 1,
+            "stderr": "Failed to start process: [Errno 2] No such file or directory: 'ruff'",
+            "timed_out": False, "duration_ms": 1,
+        }
+        mypy_ok = {
+            "stdout": "Success: no issues found", "stderr": "", "exit_code": 0,
+            "timed_out": False, "duration_ms": 50,
+        }
+
+        call_results = [ruff_missing, mypy_ok]
+        with patch("lib.core.diagnostics.run_process", side_effect=call_results):
+            result = self.mcp.tools["code_get_diagnostics"]()
+
+        self.assertTrue(result["supported"])
+        self.assertEqual(result["check"], "mypy")
+        self.assertTrue(result["ok"])
+
+    def test_run_tests_parser_extracts_failures_list(self):
+        """FAILED lines must be parsed into parsed.failures with test_id and file."""
+        output = (
+            "FAILED test/test_foo.py::TestBar::test_baz - AssertionError: 0 != 1\n"
+            "1 failed in 0.5s\n"
+        )
+        result = run_tests._parse_pytest_output(output)
+        self.assertIsNotNone(result)
+        self.assertIn("failures", result)
+        self.assertEqual(len(result["failures"]), 1)
+        self.assertEqual(result["failures"][0]["test_id"], "test/test_foo.py::TestBar::test_baz")
+        self.assertEqual(result["failures"][0]["file"], "test/test_foo.py")
+        self.assertIn("message", result["failures"][0])
+
+    def test_run_tests_parser_no_failures_key_when_all_pass(self):
+        """When no FAILED lines are present, failures key must be absent."""
+        result = run_tests._parse_pytest_output("5 passed in 0.1s")
+        self.assertIsNotNone(result)
+        self.assertNotIn("failures", result)
+
+    def test_git_manage_fast_path_skips_discovery_when_git_marker_present(self):
+        """With a .git marker and explicit repo_path, no discovery scan should run."""
+        repo = self.root / "myrepo"
+        (repo / ".git").mkdir(parents=True)
+        mcp = FakeMCP()
+        git_manage.register(mcp)
+
+        ok_result = {
+            "stdout": "true", "stderr": "", "exit_code": 0,
+            "timed_out": False, "duration_ms": 1,
+        }
+        with (
+            patch("lib.core.git_manage.shutil.which", return_value="/usr/bin/git"),
+            patch("lib.core.git_manage.run_process", return_value=ok_result),
+            patch("lib.core.git_manage.discover_repositories") as discover,
+        ):
+            mcp.tools["git_manage"]("status", repo_path="myrepo")
+
+        discover.assert_not_called()
+
+    def test_git_manage_init_accepts_repo_path_subdirectory(self):
+        """init with repo_path must initialize that subdirectory, not just workspace root."""
+        mcp = FakeMCP()
+        git_manage.register(mcp)
+        sub = self.root / "subproject"
+        sub.mkdir()
+
+        def initialize(command, *, cwd):
+            (cwd / ".git").mkdir()
+            return {"stdout": "Initialized", "stderr": "", "exit_code": 0,
+                    "timed_out": False, "duration_ms": 1}
+
+        with (
+            patch("lib.core.git_manage.shutil.which", return_value="/usr/bin/git"),
+            patch("lib.core.git_manage.run_process", side_effect=initialize),
+        ):
+            result = mcp.tools["git_manage"]("init", repo_path="subproject")
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertTrue((sub / ".git").exists())
 
 
 if __name__ == "__main__":
