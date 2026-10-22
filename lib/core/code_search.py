@@ -2,7 +2,7 @@ import re, time
 from typing import Annotated
 
 from pydantic import Field
-from ..support import describe, iter_workspace_files
+from ..support import GENERATED_DIRS, describe, iter_workspace_files
 
 
 def code_search_ripgrep(
@@ -11,6 +11,7 @@ def code_search_ripgrep(
     path_glob: Annotated[str | None, Field(description="Optional glob pattern restricting searched workspace-relative file paths.")] = None,
     max_results: Annotated[int, Field(ge=1, le=10000, description="Maximum number of matching lines to return, from 1 to 10000.")] = 100,
     context_lines: Annotated[int, Field(ge=0, le=10, description="Number of surrounding context lines to include before and after each match, from 0 to 10.")] = 0,
+    include_generated: Annotated[bool, Field(description="When true, also search generated and build directories (node_modules, __pycache__, dist, build, .venv, etc.) that are skipped by default.")] = False,
 ) -> dict:
     if max_results < 1 or max_results > 10000:
         raise ValueError("max_results must be 1..10000")
@@ -30,7 +31,10 @@ def code_search_ripgrep(
     errors = []
     total_matches_seen = 0
     start_time = time.monotonic()
-    for path, relative_path in iter_workspace_files(path_glob=path_glob, errors=errors):
+    exclude_dirs = frozenset() if include_generated else GENERATED_DIRS
+    for path, relative_path in iter_workspace_files(
+        path_glob=path_glob, errors=errors, exclude_dirs=exclude_dirs
+    ):
         if time.monotonic() - start_time > 15.0:
             return {
                 "matches": hits,
@@ -55,17 +59,6 @@ def code_search_ripgrep(
                             match_entry["context_before"] = file_lines[before_start:line_number - 1]
                             match_entry["context_after"] = file_lines[line_number:after_end]
                         hits.append(match_entry)
-                    if total_matches_seen >= max_results and len(hits) >= max_results:
-                        # Continue scanning to count total, but return once all files done or
-                        # we have enough. For efficiency, stop after returning max_results hits.
-                        return {
-                            "matches": hits,
-                            "truncated": True,
-                            "truncation_reason": "max_results",
-                            "total_matches_seen": total_matches_seen,
-                            "omitted_count": 0,
-                            "errors": errors,
-                        }
         except UnicodeDecodeError:
             continue
         except OSError as exc:
@@ -73,13 +66,18 @@ def code_search_ripgrep(
                 "path": relative_path,
                 "message": exc.strerror or "File could not be read",
             })
-    return {
+    # Scanning continues past max_results so the counts below are exact.
+    omitted = total_matches_seen - len(hits)
+    result = {
         "matches": hits,
-        "truncated": False,
+        "truncated": omitted > 0,
         "total_matches_seen": total_matches_seen,
-        "omitted_count": 0,
+        "omitted_count": omitted,
         "errors": errors,
     }
+    if omitted > 0:
+        result["truncation_reason"] = "max_results"
+    return result
 
 
 def register(mcp):
@@ -87,6 +85,8 @@ def register(mcp):
         "Search workspace text with a Python re regex or literal query; path_glob limits the search and scan failures appear in errors. "
         "Uses Python's re module (not ripgrep) — supports standard Python regex syntax. "
         "Returns matched lines and optional context lines. "
-        "When truncated, total_matches_seen and omitted_count indicate how many results were not returned. "
+        "Generated/build directories (node_modules, __pycache__, dist, build, .venv, etc.) are skipped unless include_generated is true. "
+        "total_matches_seen counts every match found; when truncated, omitted_count is how many were not returned "
+        "(a lower bound if truncation_reason is time_limit). "
         "When to use: Find matching code or text."
     ))(code_search_ripgrep)

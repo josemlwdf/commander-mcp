@@ -29,14 +29,33 @@ def read_files(
     for name in paths:
         try:
             p = inside(name, must_exist=True)
-        except (ValueError, OSError) as exc:
-            file_errors.append({"path": name, "message": str(exc)})
+        except FileNotFoundError:
+            file_errors.append({
+                "path": name,
+                "error_code": "not_found",
+                "message": f"File not found: {name}",
+            })
+            continue
+        except ValueError:
+            file_errors.append({
+                "path": name,
+                "error_code": "path_escape",
+                "message": f"Path escapes authorized workspace root: {name}",
+            })
+            continue
+        except OSError as exc:
+            # Use strerror only: str(exc) embeds the absolute host path.
+            file_errors.append({
+                "path": name,
+                "error_code": "io_error",
+                "message": f"{exc.strerror or 'File could not be read'}: {name}",
+            })
             continue
         if not p.is_file():
-            file_errors.append({"path": name, "message": f"Not a file: {name}"})
+            file_errors.append({"path": name, "error_code": "not_a_file", "message": f"Not a file: {name}"})
             continue
         if p.stat().st_size > MAX_READ_BYTES:
-            file_errors.append({"path": name, "message": f"File exceeds 2 MiB read limit: {name}"})
+            file_errors.append({"path": name, "error_code": "file_too_large", "message": f"File exceeds 2 MiB read limit: {name}"})
             continue
         try:
             full_content = p.read_text(encoding="utf-8")

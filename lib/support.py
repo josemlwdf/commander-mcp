@@ -10,6 +10,12 @@ SHELL = os.environ.get("SHELL") or ("powershell.exe" if os.name == "nt" else "/b
 MAX_READ_BYTES = 2 * 1024 * 1024
 MAX_OUTPUT_BYTES = 1024 * 1024
 DEFAULT_TIMEOUT_MS = 30_000
+# Generated/build/cache directories skipped by default in workspace scans.
+GENERATED_DIRS = frozenset({
+    "node_modules", "__pycache__", "dist", "build", ".venv", "venv",
+    ".mypy_cache", ".ruff_cache", ".pytest_cache", "coverage", ".next",
+    "target", "out", ".tox", "htmlcov",
+})
 # Maximum seconds a tool handler subprocess is allowed to run.
 # This constant documents the intended deadline for future worker-subprocess
 # isolation; see lib/_worker.py for the run_in_worker implementation.
@@ -69,6 +75,7 @@ def iter_workspace_files(
     *,
     path_glob: str | None = None,
     errors: list[dict[str, str]] | None = None,
+    exclude_dirs: frozenset[str] = frozenset(),
 ) -> Iterator[tuple[Path, str]]:
     """Yield workspace files and report paths that could not be scanned."""
     root = inside(".")
@@ -95,7 +102,7 @@ def iter_workspace_files(
             relative_path = (Path(relative_directory) / entry.name).as_posix()
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    if entry.name == ".git":
+                    if entry.name == ".git" or entry.name in exclude_dirs:
                         continue
                     child_parts = (*directory_parts, entry.name)
                     if _may_match_glob_scope(child_parts, prefix):
@@ -218,43 +225,109 @@ def validate_shell_command(command: str, cwd: Path) -> None:
         if target and target not in ("/dev/null","NUL"):
             try: inside(target if Path(target).is_absolute() else cwd/target)
             except ValueError: raise ValueError(f"Redirection target escapes authorized workspace: {target}")
-    try: tokens=shlex.split(command, posix=os.name != "nt")
+    try:
+        lexer = shlex.shlex(_split_unquoted_newlines(command), posix=os.name != "nt", punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
     except ValueError: raise ValueError("Malformed shell command")
 
-    # Build a set of tokens that appear inside quotes in the raw command.
-    # These are user-supplied string literals, not path candidates.
-    _quoted_tokens = _extract_quoted_tokens(command)
-
-    redir=False
+    at_command = True      # next word is a command name (start, or after ; && || | ( ))
+    command_name = ""
+    expect_target = False  # previous token was a redirection operator
+    expect_script = False  # previous token was `sh -c` style flag
     for token in tokens:
-        if token in (">",">>","<","2>","1>","&>",">|"):
-            redir=True; continue
-        if token in (";","&&","||","|"): redir=False; continue
-        if token.startswith("-") and "=" in token: token=token.split("=",1)[1]
-        candidate=token
-        if redir or candidate.startswith(("./","../","/","~/","\\\\")) or re.match(r"^[A-Za-z]:[\\/]",candidate):
-            # A lone "/" is the division operator, not a path — don't reject it.
-            if candidate == "/":
-                redir = False
+        if os.name == "nt": token = token.strip("'\"")
+        if token and all(ch in _SHELL_PUNCTUATION for ch in token):
+            if "<" in token or ">" in token:
+                # `>&` / `<&` duplicate descriptors and heredocs take no path target.
+                expect_target = token[-1] != "&" and token not in ("<<", "<<<")
+            else:
+                at_command, command_name, expect_target, expect_script = True, "", False, False
+            continue
+        if expect_target:
+            expect_target = False
+            _check_shell_token(token, cwd)
+            continue
+        if expect_script:
+            expect_script = False
+            validate_shell_command(token, cwd)
+            continue
+        if at_command:
+            if re.match(r"[A-Za-z_]\w*=", token):  # leading VAR=value assignment
+                _check_shell_token(token, cwd)
                 continue
-            # Tokens that were originally inside quotes are string literals, not paths.
-            if candidate in _quoted_tokens:
-                redir = False
-                continue
-            if candidate.startswith("~"): raise ValueError("Home-directory path escapes the workspace")
-            try: inside(candidate if Path(candidate).is_absolute() else cwd / candidate)
-            except ValueError: raise ValueError(f"Command token '{candidate}' looks like a path outside the authorized workspace. If this is not a path (e.g. a division operator), rewrite the command to avoid ambiguity.")
-        redir=False
+            at_command = False
+            command_name = re.sub(r"\.exe$", "", Path(token.replace("\\", "/")).name.lower())
+            _check_shell_token(token, cwd, command_position=True)
+            continue
+        if command_name in _SHELL_INTERPRETERS and (re.fullmatch(r"-[A-Za-z]*c", token) or token.lower() in ("-command", "/c", "/k")):
+            expect_script = True
+            continue
+        if command_name == "eval":
+            validate_shell_command(token, cwd)
+            continue
+        if command_name in _LITERAL_ARG_COMMANDS:
+            continue  # echo/printf arguments are text, not paths (redirections are still checked)
+        _check_shell_token(token, cwd)
 
 
-def _extract_quoted_tokens(command: str) -> frozenset[str]:
-    """Return the set of string values that appeared inside single or double quotes."""
-    quoted: set[str] = set()
-    # Match single-quoted or double-quoted substrings in the raw command.
-    for m in re.finditer(r"'([^']*)'|\"([^\"]*)\"", command):
-        inner = m.group(1) if m.group(1) is not None else m.group(2)
-        quoted.add(inner)
-    return frozenset(quoted)
+_SHELL_PUNCTUATION = frozenset("();<>|&")
+_SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish", "pwsh", "powershell", "cmd"})
+_LITERAL_ARG_COMMANDS = frozenset({"echo", "printf"})
+_SAFE_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "NUL"})
+
+
+def _split_unquoted_newlines(command: str) -> str:
+    """Turn unquoted newlines into `;` separators and drop backslash-newline continuations."""
+    out: list[str] = []
+    quote = ""
+    escaped = False
+    posix = os.name != "nt"
+    for ch in command:
+        if escaped:
+            escaped = False
+            if ch in "\r\n":
+                out.pop()  # shell removes backslash-newline entirely
+                continue
+            out.append(ch)
+            continue
+        if posix and ch == "\\" and quote != "'":
+            escaped = True
+            out.append(ch)
+            continue
+        if quote:
+            if ch == quote: quote = ""
+        elif ch in "'\"": quote = ch
+        elif ch in "\r\n":
+            out.append(" ; ")
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+def _check_shell_token(token: str, cwd: Path, *, command_position: bool = False) -> None:
+    """Reject a shell word (or its value after `=`) that points outside the workspace.
+
+    Explicit path arguments (./x, ../x, /x, C:\\x) get the full symlink-resolving check.
+    Command names and other path-like words get a lexical containment check only, so a
+    workspace-relative launcher such as `.venv/bin/python` keeps working.
+    """
+    candidates = [token]
+    if "=" in token: candidates.append(token.split("=", 1)[1])
+    for candidate in candidates:
+        if not candidate or candidate == "/" or candidate in _SAFE_DEVICES: continue  # a lone "/" is division
+        explicit = (candidate == ".." or candidate.startswith(("./", "../", "/", "~", "\\\\"))
+                    or re.match(r"[A-Za-z]:[\\/]", candidate))
+        if not (explicit or "/" in candidate or "\\" in candidate): continue
+        if candidate.startswith("~"): raise ValueError("Home-directory path escapes the workspace")
+        target = candidate if Path(candidate).is_absolute() else cwd / candidate
+        try:
+            if explicit and not command_position:
+                inside(target)
+            else:
+                Path(os.path.normpath(str(target))).relative_to(ROOT)
+        except ValueError: raise ValueError(f"Command token '{candidate}' looks like a path outside the authorized workspace. If this is not a path (e.g. a division operator), rewrite the command to avoid ambiguity.")
 
 def result_text(value: object) -> str:
     if isinstance(value, str): return value

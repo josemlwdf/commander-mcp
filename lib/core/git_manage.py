@@ -188,7 +188,7 @@ def git_manage(
         Field(description=(
             "Git operation to run. status and init take no args; diff and log accept "
             "validated options; commit requires -m and a message; checkout requires "
-            "one branch or ref. init initializes the workspace root or a repo_path subdirectory."
+            "exactly one branch, tag, or commit (file paths are rejected with error_code not_a_ref). init initializes the workspace root or a repo_path subdirectory."
         )),
     ],
     args: Annotated[
@@ -353,6 +353,29 @@ def git_manage(
             "message": "Could not verify that the selected workspace path is a Git repository.",
             "exit_code": check["exit_code"] or 1,
         }
+    if action == "checkout":
+        ref = args[0]
+        resolved = run_process(
+            [git, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=selected_path
+        )
+        if resolved["exit_code"] != 0:
+            # Allow DWIM checkout of a branch that exists only as a remote-tracking ref.
+            remote = run_process(
+                [git, "for-each-ref", "--format=%(refname)", f"refs/remotes/*/{ref}"],
+                cwd=selected_path,
+            )
+            if remote["exit_code"] != 0 or not remote["stdout"].strip():
+                return {
+                    "supported": True,
+                    "error_code": "not_a_ref",
+                    "message": (
+                        f"'{ref}' is not a branch, tag, or commit. checkout only switches refs; "
+                        "restoring file contents is not supported because it discards uncommitted edits."
+                    ),
+                    "exit_code": 1,
+                }
+        # '--' forces git to treat the argument as a ref, never as a file path.
+        return run_process([git, "checkout", ref, "--"], cwd=selected_path)
     return run_process([git, action, *args], cwd=selected_path)
 
 
