@@ -204,6 +204,28 @@ class GitCheckoutSafetyTests(_WorkspaceTestCase):
         self.assertEqual(result["stdout"], "")
         self.assertIn("nothing to commit", result["stderr"])
 
+    def test_add_action_stages_files_and_validates_args(self):
+        (self.root / "new.txt").write_text("n\n", encoding="utf-8")
+        result = git_manage.git_manage("add", args=["new.txt"])
+        self.assertEqual(result["exit_code"], 0)
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=self.root, check=True,
+            capture_output=True, text=True,
+        ).stdout
+        self.assertIn("A  new.txt", status)
+        for bad in ([], ["--force", "new.txt"], ["../outside.txt"]):
+            with self.subTest(args=bad):
+                with self.assertRaises(ValueError):
+                    git_manage.git_manage("add", args=bad)
+
+    def test_repo_path_description_allows_init_subdirectory(self):
+        from typing import get_type_hints
+        hints = get_type_hints(git_manage.git_manage, include_extras=True)
+        text = " ".join(
+            m.description for m in hints["repo_path"].__metadata__ if getattr(m, "description", None)
+        )
+        self.assertNotIn("must be omitted for init", text)
+
     def test_control_successful_commit_output_stays_on_stdout(self):
         self._git("config", "user.name", "t")
         self._git("config", "user.email", "t@example.com")

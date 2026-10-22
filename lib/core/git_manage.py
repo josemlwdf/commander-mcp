@@ -124,7 +124,7 @@ def _tool_description() -> str:
             "they want a new repository initialized before calling git_manage with action='init'."
         )
     return describe(
-        "Run a validated workspace Git action: status, diff, log, commit, checkout, or init. "
+        "Run a validated workspace Git action: status, diff, log, add, commit, checkout, or init. "
         "Pass action-specific Git options as separate strings in args. "
         f"{state} Use workspace-relative repo_path when selecting a repository. "
         "When repo_path is given and has a .git marker, workspace scan is bypassed for faster execution. "
@@ -197,10 +197,10 @@ def _route_failure_to_stderr(result: dict) -> dict:
 
 def git_manage(
     action: Annotated[
-        Literal["status", "diff", "log", "commit", "checkout", "init"],
+        Literal["status", "diff", "log", "add", "commit", "checkout", "init"],
         Field(description=(
             "Git operation to run. status and init take no args; diff and log accept "
-            "validated options; commit requires -m and a message; checkout requires "
+            "validated options; add requires one or more workspace-relative paths (options are rejected); commit requires -m and a message; checkout requires "
             "exactly one branch, tag, or commit (file paths are rejected with error_code not_a_ref). init initializes the workspace root or a repo_path subdirectory."
         )),
     ],
@@ -211,7 +211,7 @@ def git_manage(
             "Use no arguments for status or init. diff supports --cached, --stat, "
             "--name-only, and workspace-relative paths after --; log supports -n, --oneline, "
             "--decorate, --all, --, and a count. commit requires ['-m', 'message'] "
-            "and optionally accepts -a; checkout takes exactly one branch or ref."
+            "and optionally accepts -a; add takes one or more workspace-relative paths; checkout takes exactly one branch or ref."
         )),
     ] = None,
     repo_path: Annotated[
@@ -219,13 +219,13 @@ def git_manage(
         Field(description=(
             "Workspace-relative path to the Git repository root. Optional when one "
             "repository is available, required when multiple repositories are found, "
-            "and must be omitted for init."
+            "and, for init, optionally names the subdirectory to initialize (defaults to the workspace root)."
         )),
     ] = None,
 ) -> dict:
     target_mcp = _MCP
     args = args or []
-    if action not in ("status", "diff", "log", "commit", "checkout", "init"):
+    if action not in ("status", "diff", "log", "add", "commit", "checkout", "init"):
         raise ValueError("Unsupported Git action")
     if action == "status" and args:
         raise ValueError("status accepts no args")
@@ -258,6 +258,8 @@ def git_manage(
             arg.startswith("-") for arg in args[message_index + 2:]
         ):
             raise ValueError("Only -a and -m commit options are accepted")
+    if action == "add" and (not args or any(arg.startswith("-") and arg != "--" for arg in args)):
+        raise ValueError("add requires one or more workspace-relative paths and accepts no options")
     if action == "checkout" and (len(args) != 1 or args[0].startswith("-")):
         raise ValueError("checkout requires exactly one branch or ref")
     for arg in args:
