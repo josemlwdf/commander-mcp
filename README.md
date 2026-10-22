@@ -132,11 +132,16 @@ Subagent tools provide a stable five-tool contract for delegated work without re
 - `subagent_complete`: closes a cooperative delegated frame.
 - `subagent_cancel`: cancels a task.
 
-Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability (future-facing), existing provider key in the current process environment, local Ollama when `SUBAGENT_LOCAL=1`, then `cooperative`.
+Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, local Ollama when `SUBAGENT_LOCAL=1`, then `cooperative`.
 
-Optional override:
+Loop-capable backends (`sampling`, `direct:*`, `local:ollama`) run an internal JSON-action loop and can return `completed` directly from `subagent_run` when `wait: true` and the run finishes quickly; otherwise they return `running` and should be polled with `subagent_status`.
 
-- `SUBAGENT_BACKEND=cooperative` forces the zero-credential cooperative path.
+Optional overrides:
+
+- `SUBAGENT_BACKEND=cooperative|sampling|direct|local` chooses the backend family.
+- `SUBAGENT_WAIT_SECONDS` controls the synchronous wait budget for `subagent_run` (default 15).
+- `SUBAGENT_MODEL_OPENAI`, `SUBAGENT_MODEL_ANTHROPIC`, `SUBAGENT_MODEL_LOCAL` override default model ids per backend.
+- `SUBAGENT_SAMPLING_URL` (plus optional `SUBAGENT_SAMPLING_MODEL` and `SUBAGENT_SAMPLING_API_KEY`) enables HTTP sampling in runtimes without a native sampling bridge.
 
 Use subagents for broad searches, independent reviews, and large-input summaries; avoid delegation for single quick lookups.
 

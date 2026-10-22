@@ -1,24 +1,30 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import threading
 from typing import Annotated, Any
 
 from pydantic import Field
 
 from ..support import describe
+from . import loop
 from .manager import SubagentManager
 from .resolve import resolve_backend
-from .roles import get_role
+from .roles import Role, get_role
 
 
 _MANAGER = SubagentManager()
 _BACKEND = "cooperative"
 _CLIENT_CAPABILITIES: dict[str, Any] | None = None
+_SAMPLING_CALLBACK = None
+_THREADS: dict[str, threading.Thread] = {}
 
 
-def configure_runtime(*, client_capabilities: dict[str, Any] | None = None) -> None:
-    global _BACKEND, _CLIENT_CAPABILITIES
+def configure_runtime(*, client_capabilities: dict[str, Any] | None = None, sampling_callback=None) -> None:
+    global _BACKEND, _CLIENT_CAPABILITIES, _SAMPLING_CALLBACK
     _CLIENT_CAPABILITIES = client_capabilities
+    _SAMPLING_CALLBACK = sampling_callback
     _BACKEND = resolve_backend(client_capabilities)
 
 
@@ -47,6 +53,66 @@ def _instructions(role_name: str, task: str, context: str | None, deliverable: s
     return "\n".join(parts)
 
 
+def _wait_seconds() -> float:
+    raw = (os.environ.get("SUBAGENT_WAIT_SECONDS") or "15").strip()
+    try:
+        return max(0.5, min(float(raw), 240.0))
+    except ValueError:
+        return 15.0
+
+
+def _loop_runner(task_id: str, role_obj: Role) -> None:
+    try:
+        task_obj = _MANAGER.start_task(task_id)
+        result, turns, tokens = loop.run_loop(
+            task_obj.backend,
+            role_obj,
+            task_obj.task,
+            task_obj.context,
+            task_obj.deliverable,
+            sampling_fn=_SAMPLING_CALLBACK,
+        )
+        invalid = role_obj.validator(result)
+        if invalid:
+            raise ValueError(invalid)
+        _MANAGER.complete_task(task_id, result, turns=turns, tokens=tokens)
+    except Exception as exc:  # noqa: BLE001
+        _MANAGER.fail_task(task_id, str(exc))
+    finally:
+        _THREADS.pop(task_id, None)
+
+
+def _launch_loop(task_id: str, role_obj: Role) -> None:
+    thread = threading.Thread(target=_loop_runner, args=(task_id, role_obj), daemon=True, name=f"subagent-{task_id}")
+    _THREADS[task_id] = thread
+    thread.start()
+
+
+def _terminal_payload(task_id: str) -> dict:
+    task_obj = _MANAGER.get_task(task_id)
+    if task_obj.state == "done":
+        return {
+            "status": "completed",
+            "task_id": task_obj.task_id,
+            "backend": task_obj.backend,
+            "result": task_obj.result or "",
+            "usage": {"turns": task_obj.turns_used, "tokens": task_obj.tokens_used},
+        }
+    if task_obj.state in {"failed", "cancelled"}:
+        return {
+            "status": "failed",
+            "task_id": task_obj.task_id,
+            "backend": task_obj.backend,
+            "error": task_obj.error or f"task ended with state {task_obj.state}",
+        }
+    return {
+        "status": "running",
+        "task_id": task_obj.task_id,
+        "backend": task_obj.backend,
+        "poll": "subagent_status",
+    }
+
+
 def subagent_run(
     role: Annotated[str, Field(description="Registered subagent role name, e.g. explorer, reviewer, planner.")],
     task: Annotated[str, Field(description="Task for the subagent to perform in isolation from the parent flow.")],
@@ -61,25 +127,23 @@ def subagent_run(
 
     task_obj = _MANAGER.create_task(role, task, selected_backend, context, deliverable)
 
-    if selected_backend != "cooperative":
-        # Phase-1 floor: expose resolved backend while failing closed until loop backends are added.
-        _MANAGER.fail_task(task_obj.task_id, "non-cooperative backend not enabled in this build")
+    if selected_backend == "cooperative":
+        frame = _MANAGER.make_frame(task_obj.task_id, role_obj, task)
+        _MANAGER.mark_delegated(task_obj.task_id, frame)
         return {
-            "status": "failed",
+            "status": "delegated_to_host",
             "task_id": task_obj.task_id,
             "backend": selected_backend,
-            "error": "non-cooperative backend not enabled in this build",
+            "instructions": _instructions(role, task, context, deliverable),
+            "wait": bool(wait),
         }
 
-    frame = _MANAGER.make_frame(task_obj.task_id, role_obj, task)
-    _MANAGER.mark_delegated(task_obj.task_id, frame)
-    return {
-        "status": "delegated_to_host",
-        "task_id": task_obj.task_id,
-        "backend": selected_backend,
-        "instructions": _instructions(role, task, context, deliverable),
-        "wait": bool(wait),
-    }
+    _launch_loop(task_obj.task_id, role_obj)
+    if wait:
+        thread = _THREADS.get(task_obj.task_id)
+        if thread is not None:
+            thread.join(timeout=_wait_seconds())
+    return _terminal_payload(task_obj.task_id)
 
 
 def subagent_status(
@@ -133,6 +197,10 @@ def subagent_complete(
 def subagent_cancel(
     task_id: Annotated[str, Field(description="Task identifier to cancel.")],
 ) -> dict:
+    if thread := _THREADS.get(task_id):
+        if thread.is_alive():
+            # Cancellation is cooperative: mark task and let running call end naturally.
+            pass
     task_obj = _MANAGER.cancel_task(task_id)
     return {
         "task_id": task_obj.task_id,
@@ -181,3 +249,4 @@ def register(mcp):
     mcp.tool(description=describe(base + " Fetch full or paged task result."))(subagent_result)
     mcp.tool(description=describe(base + " Complete a cooperative delegated frame with final result text."))(subagent_complete)
     return mcp.tool(description=describe(base + " Cancel a task and close any open frame."))(subagent_cancel)
+

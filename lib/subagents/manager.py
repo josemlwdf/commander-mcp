@@ -100,6 +100,15 @@ class SubagentManager:
             self._tasks[task_obj.task_id] = task_obj
             return task_obj
 
+    def start_task(self, task_id: str) -> Task:
+        with self._lock:
+            self._sweep_locked()
+            task = self._tasks[task_id]
+            if task.state in {"queued", "running"}:
+                task.state = "running"
+                task.updated_at = time.time()
+            return task
+
     def mark_delegated(self, task_id: str, frame: Frame) -> None:
         with self._lock:
             self._sweep_locked()
@@ -112,6 +121,8 @@ class SubagentManager:
         with self._lock:
             self._sweep_locked()
             task = self._tasks[task_id]
+            if task.state in {"cancelled", "failed"}:
+                return task
             task.result = result
             task.state = "done"
             task.turns_used = turns

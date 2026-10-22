@@ -28,8 +28,8 @@ def ollama_up(timeout: float = 0.4) -> bool:
 def resolve_backend(client_capabilities: dict | None = None) -> str:
     """Resolve the active subagent backend for this process/session.
 
-    Current Python implementation ships cooperative mode as the always-available floor.
-    The direct/local/sampling labels are still resolved for observability and future loops.
+    Cooperative mode remains the always-available floor.
+    When available, sampling/direct/local backends are selected for loop execution.
     """
     mode = (os.environ.get("SUBAGENT_BACKEND") or "auto").strip().lower()
     caps = client_capabilities or {}
