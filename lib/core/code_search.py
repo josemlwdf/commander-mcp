@@ -5,13 +5,13 @@ from pydantic import Field
 from ..support import GENERATED_DIRS, describe, iter_workspace_files
 
 
-def code_search_ripgrep(
-    query: Annotated[str, Field(description="Text to search for. Interpreted as a regular expression when is_regex is true, otherwise as a literal string.")],
-    is_regex: Annotated[bool, Field(description="Whether query is a regular expression; defaults to true.")] = True,
-    path_glob: Annotated[str | None, Field(description="Optional glob pattern restricting searched workspace-relative file paths.")] = None,
-    max_results: Annotated[int, Field(ge=1, le=10000, description="Maximum number of matching lines to return, from 1 to 10000.")] = 100,
-    context_lines: Annotated[int, Field(ge=0, le=10, description="Number of surrounding context lines to include before and after each match, from 0 to 10.")] = 0,
-    include_generated: Annotated[bool, Field(description="When true, also search generated and build directories (node_modules, __pycache__, dist, build, .venv, etc.) that are skipped by default.")] = False,
+def _search_text_impl(
+    query: str,
+    is_regex: bool,
+    path_glob: str | None,
+    max_results: int,
+    context_lines: int,
+    include_generated: bool,
 ) -> dict:
     if max_results < 1 or max_results > 10000:
         raise ValueError("max_results must be 1..10000")
@@ -66,7 +66,6 @@ def code_search_ripgrep(
                 "path": relative_path,
                 "message": exc.strerror or "File could not be read",
             })
-    # Scanning continues past max_results so the counts below are exact.
     omitted = total_matches_seen - len(hits)
     result = {
         "matches": hits,
@@ -80,8 +79,31 @@ def code_search_ripgrep(
     return result
 
 
+def search_text(
+    query: Annotated[str, Field(description="Text to search for. Interpreted as a regular expression when is_regex is true, otherwise as a literal string.")],
+    is_regex: Annotated[bool, Field(description="Whether query is a regular expression; defaults to true.")] = True,
+    path_glob: Annotated[str | None, Field(description="Optional glob pattern restricting searched workspace-relative file paths.")] = None,
+    max_results: Annotated[int, Field(ge=1, le=10000, description="Maximum number of matching lines to return, from 1 to 10000.")] = 100,
+    context_lines: Annotated[int, Field(ge=0, le=10, description="Number of surrounding context lines to include before and after each match, from 0 to 10.")] = 0,
+    include_generated: Annotated[bool, Field(description="When true, also search generated and build directories (node_modules, __pycache__, dist, build, .venv, etc.) that are skipped by default.")] = False,
+) -> dict:
+    return _search_text_impl(query, is_regex, path_glob, max_results, context_lines, include_generated)
+
+
+def code_search_ripgrep(
+    query: Annotated[str, Field(description="Text to search for. Interpreted as a regular expression when is_regex is true, otherwise as a literal string.")],
+    is_regex: Annotated[bool, Field(description="Whether query is a regular expression; defaults to true.")] = True,
+    path_glob: Annotated[str | None, Field(description="Optional glob pattern restricting searched workspace-relative file paths.")] = None,
+    max_results: Annotated[int, Field(ge=1, le=10000, description="Maximum number of matching lines to return, from 1 to 10000.")] = 100,
+    context_lines: Annotated[int, Field(ge=0, le=10, description="Number of surrounding context lines to include before and after each match, from 0 to 10.")] = 0,
+    include_generated: Annotated[bool, Field(description="When true, also search generated and build directories (node_modules, __pycache__, dist, build, .venv, etc.) that are skipped by default.")] = False,
+) -> dict:
+    """Backward-compatible alias for search_text."""
+    return _search_text_impl(query, is_regex, path_glob, max_results, context_lines, include_generated)
+
+
 def register(mcp):
-    return mcp.tool(description=describe(
+    description = describe(
         "Search workspace text with a Python re regex or literal query; path_glob limits the search and scan failures appear in errors. "
         "Uses Python's re module (not ripgrep) — supports standard Python regex syntax. "
         "Returns matched lines and optional context lines. "
@@ -89,4 +111,9 @@ def register(mcp):
         "total_matches_seen counts every match found; when truncated, omitted_count is how many were not returned "
         "(a lower bound if truncation_reason is time_limit). "
         "When to use: Find matching code or text."
+    )
+    mcp.tool(description=description)(search_text)
+    return mcp.tool(description=describe(
+        "Deprecated alias for search_text with identical behavior and schema; maintained for compatibility. "
+        "When to use: Existing clients that still call code_search_ripgrep."
     ))(code_search_ripgrep)

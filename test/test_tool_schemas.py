@@ -74,7 +74,7 @@ class ToolSchemaTests(unittest.TestCase):
             module.register(cls.mcp)
 
     def test_every_tool_and_argument_has_a_description(self):
-        self.assertEqual(len(self.mcp.tools), 16)
+        self.assertEqual(len(self.mcp.tools), 17)
         for name, function in self.mcp.tools.items():
             with self.subTest(tool=name):
                 self.assertTrue(self.mcp.descriptions[name].strip())

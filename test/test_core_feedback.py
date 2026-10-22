@@ -349,6 +349,14 @@ class CoreFeedbackTests(unittest.TestCase):
         self.assertIn("matches", result)
         self.assertEqual(result["matches"], [])
 
+    def test_search_text_and_code_search_alias_match(self):
+        (self.root / "src.py").write_text("needle\n", encoding="utf-8")
+
+        primary = self.mcp.tools["search_text"]("needle")
+        alias = self.mcp.tools["code_search_ripgrep"]("needle")
+
+        self.assertEqual(primary, alias)
+
     def test_find_files_excludes_generated_dirs_by_default(self):
         (self.root / "__pycache__").mkdir()
         (self.root / "__pycache__" / "cached.py").write_text("x", encoding="utf-8")
