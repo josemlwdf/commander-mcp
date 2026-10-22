@@ -197,6 +197,22 @@ class GitCheckoutSafetyTests(_WorkspaceTestCase):
             "git_manage checkout silently reverted a file with uncommitted edits",
         )
 
+    def test_failed_commit_reports_message_on_stderr_not_stdout(self):
+        """git prints 'nothing to commit' to stdout; a failure must surface on stderr."""
+        result = git_manage.git_manage("commit", args=["-m", "nothing to do"])
+        self.assertNotEqual(result["exit_code"], 0)
+        self.assertEqual(result["stdout"], "")
+        self.assertIn("nothing to commit", result["stderr"])
+
+    def test_control_successful_commit_output_stays_on_stdout(self):
+        self._git("config", "user.name", "t")
+        self._git("config", "user.email", "t@example.com")
+        self._git("config", "commit.gpgsign", "false")
+        self.tracked.write_text("changed\n", encoding="utf-8")
+        result = git_manage.git_manage("commit", args=["-a", "-m", "change"])
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("change", result["stdout"])
+
 
 # ----------------------------------------------------------------------
 # code_search_ripgrep: truncation metadata and search scope

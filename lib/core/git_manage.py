@@ -128,6 +128,7 @@ def _tool_description() -> str:
         "Pass action-specific Git options as separate strings in args. "
         f"{state} Use workspace-relative repo_path when selecting a repository. "
         "When repo_path is given and has a .git marker, workspace scan is bypassed for faster execution. "
+        "When git exits non-zero, any output it printed to stdout is returned in stderr and stdout is empty. "
         "When to use: Review or manage local changes."
     )
 
@@ -180,6 +181,18 @@ def _update_tool_description(mcp, description: str) -> None:
         return
 
     raise RuntimeError("The MCP server cannot update the git_manage tool description")
+
+
+def _route_failure_to_stderr(result: dict) -> dict:
+    """Git prints some failures (e.g. 'nothing to commit') to stdout; surface them on stderr."""
+    if result.get("exit_code") == 0:
+        return result
+    out = result.get("stdout", "")
+    if out:
+        err = result.get("stderr", "")
+        result["stderr"] = out.rstrip("\n") + ("\n" + err if err else "\n")
+        result["stdout"] = ""
+    return result
 
 
 def git_manage(
@@ -287,7 +300,7 @@ def git_manage(
             new_repositories, new_errors = discover_repositories()
             _set_inventory(new_repositories, new_errors)
             _update_tool_description(target_mcp, _tool_description())
-        return result
+        return _route_failure_to_stderr(result)
 
     # Fast path: when repo_path is explicitly given and a .git marker exists there,
     # bypass the potentially slow workspace-wide discovery scan entirely.
@@ -375,8 +388,8 @@ def git_manage(
                     "exit_code": 1,
                 }
         # '--' forces git to treat the argument as a ref, never as a file path.
-        return run_process([git, "checkout", ref, "--"], cwd=selected_path)
-    return run_process([git, action, *args], cwd=selected_path)
+        return _route_failure_to_stderr(run_process([git, "checkout", ref, "--"], cwd=selected_path))
+    return _route_failure_to_stderr(run_process([git, action, *args], cwd=selected_path))
 
 
 def register(mcp):
