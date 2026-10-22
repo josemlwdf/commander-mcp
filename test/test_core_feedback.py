@@ -730,9 +730,9 @@ class CoreFeedbackTests(unittest.TestCase):
         result = self.mcp.tools["code_search_ripgrep"]("needle", max_results=3)
 
         self.assertTrue(result["truncated"])
-        self.assertIn("total_matches_seen", result)
-        self.assertGreaterEqual(result["total_matches_seen"], 3)
-        self.assertIn("omitted_count", result)
+        self.assertEqual(len(result["matches"]), 3)
+        self.assertEqual(result["total_matches_seen"], 10)
+        self.assertEqual(result["omitted_count"], 7)
 
     def test_code_search_no_truncation_has_total_matches(self):
         """Non-truncated results must still include total_matches_seen=len(matches)."""
