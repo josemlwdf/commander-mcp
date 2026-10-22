@@ -26,6 +26,7 @@ from lib.extras import (
     semantic_search,
     web_fetch,
 )
+from lib.subagents import tools as subagent_tools
 
 
 class FakeMCP:
@@ -70,11 +71,12 @@ class ToolSchemaTests(unittest.TestCase):
             lsp_lookup,
             semantic_search,
             web_fetch,
+            subagent_tools,
         ):
             module.register(cls.mcp)
 
     def test_every_tool_and_argument_has_a_description(self):
-        self.assertEqual(len(self.mcp.tools), 17)
+        self.assertEqual(len(self.mcp.tools), 22)
         for name, function in self.mcp.tools.items():
             with self.subTest(tool=name):
                 self.assertTrue(self.mcp.descriptions[name].strip())

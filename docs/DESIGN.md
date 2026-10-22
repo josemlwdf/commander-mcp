@@ -78,7 +78,7 @@ The Python modules for these Tier 1 tools are in `lib/core`; optional Tier 2 too
 ### 8. `git_operations`
 
 * **MCP Tool Name:** `git_manage`
-* **Input Schema:** `{ action: "status" | "diff" | "commit" | "checkout" | "log", args?: string[] }`
+* **Input Schema:** `{ action: "status" | "diff" | "log" | "add" | "commit" | "push" | "checkout" | "init", args?: string[] }`
 * **Implementation:** Wrap local `git` CLI execution. `diff` and `status` are vital so the agent can self-audit before finishing a task.
 
 ---

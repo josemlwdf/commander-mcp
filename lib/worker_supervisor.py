@@ -11,10 +11,22 @@ import threading
 import time
 from typing import Any, Callable
 
+from .core import commit_nudge
+from .subagents import tools as subagent_tools
+
 _MP_CTX = multiprocessing.get_context("spawn")
 _CONCURRENT_WORKER_LIMIT = 8
 _SEMAPHORE = threading.Semaphore(_CONCURRENT_WORKER_LIMIT)
 DEFAULT_WORKER_DEADLINE = 30.0  # seconds
+_NO_WORKER_TOOLS = {
+    "debug_session_step",
+    "defer_commit",
+    "subagent_run",
+    "subagent_status",
+    "subagent_result",
+    "subagent_complete",
+    "subagent_cancel",
+}
 
 
 def _worker_entrypoint(mod_name: str, func_name: str, args: tuple, kwargs: dict, conn, root_str: str | None, shell_str: str | None) -> None:
@@ -149,23 +161,40 @@ def supervise_fastmcp_tools(mcp: Any) -> None:
         return
     tools = getattr(manager, "_tools", {})
     for name, tool in list(tools.items()):
-        if name == "debug_session_step":
-            continue
-
         original_fn = tool.fn
+        original_signature = inspect.signature(original_fn)
 
         @functools.wraps(original_fn)
-        def supervised_wrapper(*args, _target_fn=original_fn, _tool_name=name, **kwargs):
-            deadline = DEFAULT_WORKER_DEADLINE
-            if _tool_name == "terminal_exec":
-                timeout_ms = kwargs.get("timeout_ms")
-                if timeout_ms is not None:
-                    try:
-                        ms = int(timeout_ms)
-                        deadline = max(30.0, (ms / 1000.0) + 5.0)
-                    except (ValueError, TypeError):
-                        pass
-            return run_tool_in_worker(_target_fn, args, kwargs, deadline=deadline, mcp=mcp)
+        def supervised_wrapper(*args, _target_fn=original_fn, _tool_name=name, _sig=original_signature, **kwargs):
+            try:
+                bound = _sig.bind_partial(*args, **kwargs)
+                bound_args = dict(bound.arguments)
+            except TypeError:
+                bound_args = dict(kwargs)
+
+            scope_block = subagent_tools.before_tool_call(_tool_name, bound_args)
+            if scope_block is not None:
+                return scope_block
+
+            gate_block = commit_nudge.before_tool_call(_tool_name, bound_args)
+            if gate_block is not None:
+                return subagent_tools.after_tool_call(_tool_name, gate_block)
+
+            if _tool_name in _NO_WORKER_TOOLS:
+                result = _target_fn(*args, **kwargs)
+            else:
+                deadline = DEFAULT_WORKER_DEADLINE
+                if _tool_name == "terminal_exec":
+                    timeout_ms = kwargs.get("timeout_ms")
+                    if timeout_ms is not None:
+                        try:
+                            ms = int(timeout_ms)
+                            deadline = max(30.0, (ms / 1000.0) + 5.0)
+                        except (ValueError, TypeError):
+                            pass
+                result = run_tool_in_worker(_target_fn, args, kwargs, deadline=deadline, mcp=mcp)
+            result = commit_nudge.after_tool_call(_tool_name, bound_args, result)
+            return subagent_tools.after_tool_call(_tool_name, result)
 
         supervised_wrapper.__signature__ = inspect.signature(original_fn)
         supervised_wrapper.__annotations__ = getattr(original_fn, "__annotations__", {})

@@ -99,9 +99,8 @@ class WorkerSupervisorTests(unittest.TestCase):
 
         supervise_fastmcp_tools(mcp)
 
-        # t2 (debug_session_step) should remain unwrapped
-        self.assertIs(t2.fn, sample_hanging_task)
-        # t1 should be wrapped
+        # both tools are wrapped; debug runs in-process while others may use worker
+        self.assertIsNot(t2.fn, sample_hanging_task)
         self.assertIsNot(t1.fn, sample_quick_task)
 
         # Wrapped tool execution calls worker

@@ -168,6 +168,34 @@ class CoreFeedbackTests(unittest.TestCase):
         self.assertNotIn("usage:", result["message"].lower())
         run_process.assert_called_once()
 
+    def test_push_action_runs_git_push_with_valid_args(self):
+        check_result = {
+            "stdout": "true",
+            "stderr": "",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 1,
+        }
+        push_result = {
+            "stdout": "pushed",
+            "stderr": "",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 2,
+        }
+        with (
+            patch("lib.core.git_manage.shutil.which", return_value="/usr/bin/git"),
+            patch("lib.core.git_manage.run_process", side_effect=[check_result, push_result]) as run_process,
+        ):
+            result = self.mcp.tools["git_manage"]("push", args=["origin", "main"])
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(run_process.call_args_list[1].args[0], ["/usr/bin/git", "push", "origin", "main"])
+
+    def test_push_rejects_unsupported_options(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported push option"):
+            self.mcp.tools["git_manage"]("push", args=["--force", "origin", "main"])
+
     def test_git_description_suggests_initialization_when_no_repo_is_found(self):
         self.mcp.tools["git_manage"]("status")
         description = self.mcp.descriptions["git_manage"]

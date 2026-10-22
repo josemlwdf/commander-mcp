@@ -5,6 +5,7 @@ import os
 import shutil
 
 from .. import support
+from ..subagents.resolve import resolve_backend
 from ..support import describe
 
 
@@ -36,6 +37,8 @@ def get_capabilities() -> dict:
     dap_configured = bool(os.environ.get("HANDY_CODER_DAP_PORT", "").strip())
     search_configured = bool(os.environ.get("HANDY_CODER_SEARCH_URL", "").strip())
     embedding_configured = bool(os.environ.get("HANDY_CODER_EMBEDDING_MODEL", "").strip())
+
+    subagent_backend = resolve_backend()
 
     tools: dict[str, dict] = {
         # Core tools — always available
@@ -86,6 +89,11 @@ def get_capabilities() -> dict:
             "playwright_installed": playwright_ok,
             "note": "requires optional playwright package + Chromium",
         },
+        "subagent_run": {"available": True, "backend": subagent_backend, "note": "start subagent task"},
+        "subagent_status": {"available": True, "backend": subagent_backend, "note": "poll task state"},
+        "subagent_result": {"available": True, "backend": subagent_backend, "note": "fetch paged result"},
+        "subagent_complete": {"available": True, "backend": subagent_backend, "note": "close delegated cooperative frame"},
+        "subagent_cancel": {"available": True, "backend": subagent_backend, "note": "cancel task"},
     }
 
     return {
@@ -97,7 +105,10 @@ def get_capabilities() -> dict:
             "HANDY_CODER_DAP_PORT": dap_configured,
             "HANDY_CODER_SEARCH_URL": search_configured,
             "HANDY_CODER_EMBEDDING_MODEL": embedding_configured,
+            "SUBAGENT_BACKEND": bool(os.environ.get("SUBAGENT_BACKEND", "").strip()),
+            "SUBAGENT_LOCAL": bool(os.environ.get("SUBAGENT_LOCAL", "").strip()),
         },
+        "subagents": {"backend": subagent_backend},
     }
 
 

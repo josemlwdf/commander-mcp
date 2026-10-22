@@ -75,7 +75,7 @@ Alternatively, use the installed entry point:
 }
 ```
 
-The server registers `read_files`, `apply_edits`, `terminal_exec`, `code_search_ripgrep`, `find_files`, `code_get_diagnostics`, `run_tests`, `git_manage`, `lsp_symbol_lookup`, `vector_search_codebase`, `code_format_lint`, `web_fetch_docs`, `debug_session_step`, `browser_action`, `get_capabilities`, and `skills_manage`.
+The server registers `read_files`, `apply_edits`, `terminal_exec`, `code_search_ripgrep`, `find_files`, `code_get_diagnostics`, `run_tests`, `git_manage`, `defer_commit`, `lsp_symbol_lookup`, `vector_search_codebase`, `code_format_lint`, `web_fetch_docs`, `debug_session_step`, `browser_action`, `get_capabilities`, `skills_manage`, `subagent_run`, `subagent_status`, `subagent_result`, `subagent_complete`, and `subagent_cancel`.
 
 Tool modules are organized by tier: Tier 1 tools live in `lib/core`, and optional Tier 2 tools live in `lib/extras`.
 
@@ -122,6 +122,24 @@ Unfiltered `run_tests` runs require a recognized test setup (for example, pytest
 
 Names must be 1-64 characters of lowercase letters, digits and hyphens, which also prevents path traversal. Failures return an `error_code`: `missing_argument`, `invalid_name`, `invalid_description`, `content_has_frontmatter`, `skill_too_large`, `not_found`, `already_exists`, `binary_file` or `io_error`.
 
+### Subagents
+
+Subagent tools provide a stable five-tool contract for delegated work without requiring any new credentials:
+
+- `subagent_run`: starts a task with a role (`explorer`, `reviewer`, or `planner`) and returns one of three statuses: `completed`, `running`, or `delegated_to_host`.
+- `subagent_status`: checks the current task state and usage.
+- `subagent_result`: fetches the full or paged result text.
+- `subagent_complete`: closes a cooperative delegated frame.
+- `subagent_cancel`: cancels a task.
+
+Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability (future-facing), existing provider key in the current process environment, local Ollama when `SUBAGENT_LOCAL=1`, then `cooperative`.
+
+Optional override:
+
+- `SUBAGENT_BACKEND=cooperative` forces the zero-credential cooperative path.
+
+Use subagents for broad searches, independent reviews, and large-input summaries; avoid delegation for single quick lookups.
+
 ### Optional Tier 2 integrations
 
 Tier 2 tools are registered without requiring external services. Tools report a clear unsupported/configuration message when their optional backend is unavailable.
@@ -144,4 +162,4 @@ This server does not include the Tier 2 external MCP gateway tool.
 - `find_files` and repository discovery impose a 15-second scan time limit and a 5,000-entry ceiling; results are marked `incomplete: true` if either limit is reached.
 - Use relative paths inside the workspace. Commands such as `npm test`, `git status`, `ls`, and `python scripts/build.py` run with the workspace as their default directory.
 
-`terminal_exec` and `git_manage` can modify the workspace. Review changes with `git_manage` actions `status` and `diff` before committing. No tool pushes commits to a remote.
+`terminal_exec` and `git_manage` can modify the workspace. Review changes with `git_manage` actions `status` and `diff` before committing. `git_manage` can also push to a configured remote when using the `push` action.
