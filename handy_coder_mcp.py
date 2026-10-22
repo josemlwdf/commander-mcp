@@ -3,55 +3,19 @@ from __future__ import annotations
 import argparse, os, sys
 from pathlib import Path
 
+from lib import ide_detector
+
 
 def _is_vscode_process_dir(path: Path) -> bool:
     """Check whether a path points to a VS Code application/process directory."""
-    path_str = str(path).lower().replace("\\", "/")
-    if "microsoft vs code" in path_str or path.name.lower() in ("code", "code - insiders"):
-        return True
-    vscode_cwd = os.environ.get("VSCODE_CWD", "").strip()
-    if vscode_cwd:
-        try:
-            if path.resolve() == Path(vscode_cwd).resolve():
-                return True
-        except (OSError, ValueError):
-            pass
-    return False
+    return ide_detector._is_vscode_process_dir(path)
 
 
 def _resolve_root(candidate: str | None = None) -> str:
-    """Determine the workspace root, ensuring the VS Code process directory is never used."""
-    # Handle unexpanded VS Code template variables
-    if candidate and (candidate.startswith("${") or not candidate.strip()):
-        candidate = None
-
-    if candidate:
-        p = Path(candidate).expanduser()
-        if not _is_vscode_process_dir(p):
-            return str(p)
-
-    # 1. Explicit environment override
-    if root := os.environ.get("HANDY_CODER_ROOT", "").strip():
-        if not root.startswith("${") and not _is_vscode_process_dir(Path(root)):
-            return root
-
-    # 2. VS Code workspace folder environment variables
-    for var in ("VSCODE_WORKSPACE_FOLDER", "WORKSPACE_FOLDER", "VSCODE_PROJECT_DIR"):
-        if root := os.environ.get(var, "").strip():
-            if not root.startswith("${") and not _is_vscode_process_dir(Path(root)):
-                return root
-
-    # 3. Check current working directory unless it is the VS Code process directory
-    try:
-        cwd = Path.cwd()
-        if not _is_vscode_process_dir(cwd):
-            return str(cwd)
-    except Exception:
-        pass
-
-    # 4. Fall back to script's parent checkout directory
+    """Determine the workspace root, recovering it from IDE settings if needed."""
     script_dir = Path(__file__).resolve().parent
-    return str(script_dir)
+    detected = ide_detector.detect_working_dir(candidate, script_dir=script_dir)
+    return detected or str(script_dir)
 
 
 try:
@@ -90,7 +54,9 @@ def main() -> None:
         print(f"[handy-coder-mcp] Startup failed: {exc}", file=sys.stderr)
         raise SystemExit(1)
 
-    print(f"[handy-coder-mcp] Authorized root: {support.ROOT}; shell: {support.SHELL}", file=sys.stderr)
+    detected_ide = ide_detector.detect_ide()
+    ide_info = f"; ide: {detected_ide}" if detected_ide else ""
+    print(f"[handy-coder-mcp] Authorized root: {support.ROOT}; shell: {support.SHELL}{ide_info}", file=sys.stderr)
     mcp = FastMCP("handy-coder-mcp")
     for module in (
         read_files, apply_edits, terminal_exec, code_search, find_files,
