@@ -35,6 +35,24 @@ class SubagentToolTests(unittest.TestCase):
         self.mcp = FakeMCP()
         subagent_tools.register(self.mcp)
 
+
+    def test_new_roles_are_available(self):
+        self.assertIsNotNone(get_role("generalist"))
+        self.assertIsNotNone(get_role("coder"))
+
+    def test_roles_expose_write_tools_by_usage(self):
+        planner = get_role("planner")
+        coder = get_role("coder")
+        explorer = get_role("explorer")
+        self.assertIsNotNone(planner)
+        self.assertIsNotNone(coder)
+        self.assertIsNotNone(explorer)
+        self.assertIn("create_file", planner.allowed_tools)
+        self.assertIn("apply_edits", planner.allowed_tools)
+        self.assertIn("create_file", coder.allowed_tools)
+        self.assertIn("apply_edits", coder.allowed_tools)
+        self.assertNotIn("apply_edits", explorer.allowed_tools)
+
     def test_registers_five_subagent_tools(self):
         self.assertEqual(
             set(self.mcp.tools),
@@ -70,6 +88,12 @@ class SubagentToolTests(unittest.TestCase):
         blocked = subagent_tools.before_tool_call("apply_edits", {})
         self.assertIsNotNone(blocked)
         self.assertEqual(blocked["error_code"], "subagent_scope_violation")
+
+    def test_scope_guard_allows_write_tools_for_coder(self):
+        run = self.mcp.tools["subagent_run"](role="coder", task="implement")
+        self.assertEqual(run["status"], "delegated_to_host")
+        self.assertIsNone(subagent_tools.before_tool_call("create_file", {}))
+        self.assertIsNone(subagent_tools.before_tool_call("apply_edits", {}))
 
     def test_reminder_trailer_is_appended(self):
         self.mcp.tools["subagent_run"](role="explorer", task="inspect")

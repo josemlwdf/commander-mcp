@@ -8,15 +8,19 @@ from pydantic import BaseModel, TypeAdapter
 from lib import support
 from lib.core import (
     apply_edits,
+    create_file,
     code_search,
     diagnostics,
     find_files,
+    commit_nudge,
     git_manage,
     read_files,
     run_tests,
     skills,
     system_info,
     terminal_exec,
+    orchestrator_bootstrap,
+    orchestrator_tasks,
 )
 from lib.extras import (
     browser,
@@ -56,15 +60,19 @@ class ToolSchemaTests(unittest.TestCase):
         cls.mcp = FakeMCP()
         for module in (
             apply_edits,
+            create_file,
             code_search,
             diagnostics,
             find_files,
+            commit_nudge,
             git_manage,
             read_files,
             run_tests,
             skills,
             system_info,
             terminal_exec,
+            orchestrator_bootstrap,
+            orchestrator_tasks,
             browser,
             code_format_lint,
             debugger,
@@ -76,7 +84,7 @@ class ToolSchemaTests(unittest.TestCase):
             module.register(cls.mcp)
 
     def test_every_tool_and_argument_has_a_description(self):
-        self.assertEqual(len(self.mcp.tools), 22)
+        self.assertEqual(len(self.mcp.tools), 26)
         for name, function in self.mcp.tools.items():
             with self.subTest(tool=name):
                 self.assertTrue(self.mcp.descriptions[name].strip())
@@ -147,6 +155,14 @@ class ToolSchemaTests(unittest.TestCase):
                                 f"{name}.{parameter} description does not name inner key '{key}'",
                             )
         self.assertGreater(checked, 0)
+
+    def test_subagent_and_orchestrator_descriptions_encourage_delegation(self):
+        subagent_desc = self.mcp.descriptions["subagent_run"].lower()
+        bootstrap_desc = self.mcp.descriptions["orchestrator_bootstrap"].lower()
+        self.assertIn("orchestration-first", subagent_desc)
+        self.assertIn("delegate", subagent_desc)
+        self.assertIn("orchestrator-first", bootstrap_desc)
+        self.assertIn("subagent", bootstrap_desc)
 
     def test_every_tool_argument_has_a_concrete_json_schema(self):
         schema_keywords = {

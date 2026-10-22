@@ -7,7 +7,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from ..core import code_search, diagnostics, find_files, read_files, run_tests
+from ..core import apply_edits, code_search, create_file, diagnostics, find_files, read_files, run_tests
 from .roles import Role
 
 ToolFn = Callable[..., dict]
@@ -17,6 +17,8 @@ _ALLOWED_TOOLS: dict[str, ToolFn] = {
     "read_files": read_files.read_files,
     "search_text": code_search.search_text,
     "find_files": find_files.find_files,
+    "create_file": create_file.create_file,
+    "apply_edits": apply_edits.apply_edits,
     "code_get_diagnostics": diagnostics.code_get_diagnostics,
     "run_tests": run_tests.run_tests,
 }

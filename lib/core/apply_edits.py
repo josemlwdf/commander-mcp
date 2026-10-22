@@ -37,7 +37,7 @@ def _expand(match: re.Match, template: str, expand_groups: bool) -> str:
 def apply_edits(
     edits: Annotated[
         list[Edit],
-        Field(min_length=1, description="Ordered edits to apply to workspace files. Each edit is an object with keys: path (workspace-relative file), old_str (regex pattern), new_str (literal replacement text), and optional position (object with 1-based keys line and col that limit the search start)."),
+        Field(min_length=1, description="Ordered edits to apply to workspace files. Each edit is an object with keys: path (workspace-relative file), old_str (regex pattern), new_str (literal replacement text), and optional position (object with 1-based keys line and col that limit the search start). Edits are staged in order; later edits run against earlier staged changes, including repeated edits to the same file."),
     ],
     replace_all: Annotated[
         bool,
@@ -163,9 +163,10 @@ def register(mcp):
     return mcp.tool(description=describe(
         "Apply regex edits to workspace files; replace_all defaults to false; dry_run=true validates without writing. "
         "Validates and stages the entire batch before writing; a later invalid edit leaves earlier edits unapplied. "
+        "Edits are processed in order against staged content, so repeated/overlapping edits on the same file are order-sensitive. "
         "old_str is a Python regular expression pattern (re module); new_str is literal replacement text unless expand_groups=true (Python re template: \\1, \\g<name>; a bad reference returns error_code='invalid_replacement'). "
         "Error messages include the zero-based edit index ([edit N]) for easy identification. "
-        "Edit failures return error_code (invalid_regex, no_match, not_found, path_escape, not_a_file, binary_file, io_error) "
+        "Edit failures return error_code (invalid_regex, invalid_replacement, no_match, not_found, path_escape, not_a_file, binary_file, io_error) "
         "with edit_index and message instead of raising; nothing is written. "
         "Each result entry includes matches (count of replacements made) and a unified diff. "
         "Returns unified diffs. When to use: Make localized changes."

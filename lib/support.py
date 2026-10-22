@@ -20,6 +20,16 @@ GENERATED_DIRS = frozenset({
 # This constant documents the intended deadline for future worker-subprocess
 # isolation; see lib/_worker.py for the run_in_worker implementation.
 WORKER_DEADLINE_SECONDS = 30.0
+HANDY_CODER_STATE_DIRNAME = ".handy_coder"
+
+
+def ensure_handy_coder_state_dir(root: Path | None = None) -> Path:
+    """Ensure the per-workspace orchestration state directory exists."""
+    workspace_root = Path(root or ROOT)
+    state_dir = workspace_root / HANDY_CODER_STATE_DIRNAME
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return state_dir
+
 
 def configure(root: str, shell: str | None = None) -> None:
     global ROOT, WORKING_DIRECTORY, SHELL
@@ -28,6 +38,7 @@ def configure(root: str, shell: str | None = None) -> None:
     WORKING_DIRECTORY = ROOT
     if not WORKING_DIRECTORY: raise RuntimeError(f"'pwd' returned no working directory for {ROOT}")
     if shell: SHELL = shell
+    ensure_handy_coder_state_dir(ROOT)
     # Warn when the workspace root is a home directory or drive root — scanning
     # these trees often causes timeouts in large environments.
     _warn_high_risk_root(ROOT)
@@ -377,5 +388,5 @@ def result_text(value: object) -> str:
 def describe(text: str, *, include_working_directory: bool = False) -> str:
     working_directory = f" Working directory: {WORKING_DIRECTORY}." if include_working_directory else ""
     return (
-        f"{text}{working_directory} Use relative paths."
+        f"{text}{working_directory}"
     )

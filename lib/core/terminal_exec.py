@@ -19,6 +19,6 @@ def register(mcp):
     return mcp.tool(description=describe(
         "Run a shell command in the workspace or a confined subdirectory. "
         "Output is limited to 1 MiB per stream; timeout defaults to 30 seconds (up to 600s). "
-        "Uses heuristic lexical checks to prevent out-of-workspace escapes.",
+        "Uses heuristic lexical checks to prevent out-of-workspace escapes, but this is not a complete sandbox for untrusted input.",
         include_working_directory=True,
     ))(terminal_exec)

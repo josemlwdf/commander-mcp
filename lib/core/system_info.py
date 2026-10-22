@@ -43,12 +43,16 @@ def get_capabilities() -> dict:
     tools: dict[str, dict] = {
         # Core tools — always available
         "read_files":           {"available": True, "note": "always enabled"},
+        "create_file":          {"available": True, "note": "always enabled"},
         "apply_edits":          {"available": True, "note": "always enabled"},
         "terminal_exec":        {"available": True, "note": "always enabled"},
         "search_text":          {"available": True, "note": "uses Python re, supports regex or literal text"},
-        "code_search_ripgrep":  {"available": True, "note": "deprecated alias for search_text"},
+        "code_search_ripgrep":  {"available": True, "note": "deprecated alias for search_text; prefer search_text for new usage"},
         "find_files":           {"available": True, "note": "always enabled"},
+        "defer_commit":         {"available": True, "note": "temporarily snooze commit nudges"},
         "skills_manage":        {"available": True, "note": "list, get, or save skills; directory override via HANDY_CODER_SKILLS_DIR"},
+        "orchestrator_bootstrap": {"available": True, "note": "creates .handy_coder implementation-plan.md and tasks.md"},
+        "orchestrator_update_task_status": {"available": True, "note": "atomically updates [status: ...] on one tasks.md line"},
         "run_tests":            {"available": pytest_ok, "note": "pytest binary" if not pytest_ok else "pytest found"},
         "git_manage":           {"available": git_ok, "note": "git binary" if not git_ok else "git found"},
         "code_get_diagnostics": {

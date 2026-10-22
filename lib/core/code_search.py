@@ -98,7 +98,7 @@ def code_search_ripgrep(
     context_lines: Annotated[int, Field(ge=0, le=10, description="Number of surrounding context lines to include before and after each match, from 0 to 10.")] = 0,
     include_generated: Annotated[bool, Field(description="When true, also search generated and build directories (node_modules, __pycache__, dist, build, .venv, etc.) that are skipped by default.")] = False,
 ) -> dict:
-    """Backward-compatible alias for search_text."""
+    """Backward-compatible alias for search_text. Prefer search_text for new integrations."""
     return _search_text_impl(query, is_regex, path_glob, max_results, context_lines, include_generated)
 
 
@@ -115,5 +115,6 @@ def register(mcp):
     mcp.tool(description=description)(search_text)
     return mcp.tool(description=describe(
         "Deprecated alias for search_text with identical behavior and schema; maintained for compatibility. "
+        "Prefer search_text for all new usage; migration is a direct rename from code_search_ripgrep -> search_text with no argument changes. "
         "When to use: Existing clients that still call code_search_ripgrep."
     ))(code_search_ripgrep)

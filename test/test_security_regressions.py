@@ -121,6 +121,20 @@ class TerminalSandboxTests(_WorkspaceTestCase):
     def test_backslash_newline_continuation_cannot_hide_path(self):
         self._assert_contained(f"cat \\\n{self.secret}")
 
+    def test_redirection_target_escape_is_blocked(self):
+        self._assert_contained("echo hi > ../escape.txt")
+
+    def test_input_redirection_escape_is_blocked(self):
+        self._assert_contained("cat < ../secret.txt")
+
+    def test_backtick_substitution_escape_is_blocked(self):
+        self._assert_contained("cat `echo ../secret.txt`")
+
+    def test_workspace_redirection_target_is_allowed(self):
+        result = terminal_exec.terminal_exec("echo inside > local.txt")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual((self.root / "local.txt").read_text(encoding="utf-8").strip(), "inside")
+
     def test_command_outside_workspace_is_rejected(self):
         with self.assertRaises(ValueError):
             support.validate_shell_command("/usr/bin/env true", self.root)

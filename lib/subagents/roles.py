@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from typing import Callable
 
 
+_READ_ONLY_TOOLS = ("read_files", "search_text", "find_files", "subagent_status", "subagent_result")
+_WRITE_TOOLS = ("create_file", "apply_edits")
+
+
 Validator = Callable[[str], str | None]
 
 
@@ -34,13 +38,29 @@ def _reviewer_result(result: str) -> str | None:
 
 
 ROLES: dict[str, Role] = {
+    "generalist": Role(
+        name="generalist",
+        system_prompt=(
+            "You are a generalist subagent. Assess user goals, clarify scope, and produce an "
+            "implementation plan focused on high-leverage execution steps. Optimize for an orchestrator that retains only minimal context and delegates the rest."
+        ),
+        allowed_tools=_READ_ONLY_TOOLS,
+        max_turns=8,
+        max_tokens=1800,
+        max_tool_calls=12,
+        result_format=(
+            "Markdown implementation plan with sections: Objective, Assumptions, Scope, Risks, "
+            "Execution Strategy, and Validation."
+        ),
+        validator=_non_empty,
+    ),
     "explorer": Role(
         name="explorer",
         system_prompt=(
             "You are an explorer subagent. Collect evidence quickly, cite file paths, "
             "and avoid speculative claims."
         ),
-        allowed_tools=("read_files", "search_text", "find_files", "subagent_status", "subagent_result"),
+        allowed_tools=_READ_ONLY_TOOLS,
         max_turns=8,
         max_tokens=1500,
         max_tool_calls=12,
@@ -54,13 +74,9 @@ ROLES: dict[str, Role] = {
             "and separate confirmed defects from suggestions."
         ),
         allowed_tools=(
-            "read_files",
-            "search_text",
-            "find_files",
+            *_READ_ONLY_TOOLS,
             "code_get_diagnostics",
             "run_tests",
-            "subagent_status",
-            "subagent_result",
         ),
         max_turns=8,
         max_tokens=1800,
@@ -71,14 +87,41 @@ ROLES: dict[str, Role] = {
     "planner": Role(
         name="planner",
         system_prompt=(
-            "You are a planner subagent. Break work into concrete steps with dependencies "
-            "and test checkpoints."
+            "You are a planner subagent. Turn an implementation plan into independent, "
+            "actionable tasks that can be executed without interfering with each other. Design tasks so an orchestrator can dispatch them one-by-one to coder subagents."
         ),
-        allowed_tools=("read_files", "search_text", "find_files", "subagent_status", "subagent_result"),
+        allowed_tools=(
+            *_READ_ONLY_TOOLS,
+            *_WRITE_TOOLS,
+        ),
         max_turns=6,
         max_tokens=1200,
         max_tool_calls=10,
-        result_format="Ordered checklist with rationale and risk notes.",
+        result_format=(
+            "Markdown checklist for tasks.md where every task starts with [ ] and includes "
+            "target files plus a short non-interference note."
+        ),
+        validator=_non_empty,
+    ),
+    "coder": Role(
+        name="coder",
+        system_prompt=(
+            "You are a coder subagent. Execute one scoped task at a time, propose concrete "
+            "file changes, and include validation steps for the orchestrator. Keep output self-contained so the parent agent does not need to retain implementation detail."
+        ),
+        allowed_tools=(
+            *_READ_ONLY_TOOLS,
+            *_WRITE_TOOLS,
+            "code_get_diagnostics",
+            "run_tests",
+        ),
+        max_turns=10,
+        max_tokens=2200,
+        max_tool_calls=18,
+        result_format=(
+            "Implementation notes with exact file paths, patch intent, validation output, and "
+            "any follow-up risks."
+        ),
         validator=_non_empty,
     ),
 }
@@ -86,3 +129,7 @@ ROLES: dict[str, Role] = {
 
 def get_role(name: str):
     return ROLES.get(name)
+
+
+def role_names() -> tuple[str, ...]:
+    return tuple(ROLES.keys())

@@ -1,4 +1,6 @@
 import json
+import sys
+import importlib.util
 import configparser
 import tomllib
 from pathlib import Path
@@ -44,6 +46,37 @@ def _path_looks_like_test(path: Path) -> bool:
             path.name in ("test", "tests")
         )
     return False
+
+def _pytest_preflight_notes(root: Path, target: Path | None) -> list[str]:
+    notes: list[str] = []
+    if target is not None:
+        return notes
+    test_dir = root / "test"
+    if test_dir.is_dir() and not (test_dir / "__init__.py").is_file():
+        notes.append(
+            "Found a `test/` directory without `test/__init__.py`. "
+            "Some pytest/import configurations can fail to resolve local package imports; "
+            "adding `test/__init__.py` can improve reliability."
+        )
+    return notes
+
+
+def _pytest_failure_hints(output: str) -> list[str]:
+    hints: list[str] = []
+    if "ModuleNotFoundError: No module named 'lib'" in output:
+        hints.append(
+            "Pytest could not import the local `lib` package. "
+            "Run tests from the workspace root, ensure `test/__init__.py` exists, "
+            "and prefer invoking pytest as `python -m pytest` in tooling."
+        )
+    return hints
+
+
+def _pytest_command() -> list[str]:
+    if importlib.util.find_spec("pytest") is not None:
+        return [sys.executable, "-m", "pytest"]
+    return ["pytest"]
+
 
 def _package_config(root) -> dict:
     package = root / "package.json"
@@ -155,16 +188,24 @@ def run_tests(
                 "Provide filter_path to run a specific target, or add a recognized test configuration."
             ),
         }
+    preflight_notes: list[str] = []
     if framework == "pytest":
-        cmd = ["pytest"] + ([str(target)] if target else [])
+        preflight_notes = _pytest_preflight_notes(root, target)
+        cmd = _pytest_command() + ([str(target)] if target else [])
     else:
         cmd = ["npx", "--no-install", framework, "run"] + ([str(target)] if target else [])
     result = run_process(cmd, cwd=root)
     out = {"supported": True, "framework": framework, **result}
     if framework == "pytest":
-        parsed = _parse_pytest_output(result.get("stdout", "") + result.get("stderr", ""))
+        combined_output = result.get("stdout", "") + result.get("stderr", "")
+        parsed = _parse_pytest_output(combined_output)
         if parsed:
             out["parsed"] = parsed
+        hints = _pytest_failure_hints(combined_output)
+        if hints:
+            out["hints"] = hints
+        if preflight_notes:
+            out["preflight_notes"] = preflight_notes
     return out
 
 
@@ -173,6 +214,6 @@ def register(mcp):
         "Run configured Jest, Vitest, or pytest tests; unfiltered runs require recognized test setup. "
         "filter_path is workspace-confined; when it points to test files, discovery is skipped. "
         "Returns parsed summary counts when available; for pytest, also returns failures list with "
-        "test_id, file, and message fields for each failed test. "
+        "test_id, file, and message fields for each failed test, plus optional hints for common import issues. "
         "When to use: Execute project tests."
     ))(run_tests)

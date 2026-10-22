@@ -11,7 +11,7 @@ from ..support import describe
 from . import loop
 from .manager import SubagentManager
 from .resolve import resolve_backend
-from .roles import Role, get_role
+from .roles import Role, get_role, role_names
 
 
 _MANAGER = SubagentManager()
@@ -30,6 +30,10 @@ def configure_runtime(*, client_capabilities: dict[str, Any] | None = None, samp
 
 def _backend() -> str:
     return _BACKEND or "cooperative"
+
+
+def _available_roles_text() -> str:
+    return ", ".join(role_names())
 
 
 def _instructions(role_name: str, task: str, context: str | None, deliverable: str | None) -> str:
@@ -114,7 +118,7 @@ def _terminal_payload(task_id: str) -> dict:
 
 
 def subagent_run(
-    role: Annotated[str, Field(description="Registered subagent role name, e.g. explorer, reviewer, planner.")],
+    role: Annotated[str, Field(description="Registered subagent role name, e.g. generalist, coder, explorer, reviewer, planner.")],
     task: Annotated[str, Field(description="Task for the subagent to perform in isolation from the parent flow.")],
     context: Annotated[str | None, Field(description="Optional context to pass to the subagent, such as branch, files, or constraints.")] = None,
     deliverable: Annotated[str | None, Field(description="Optional explicit deliverable format for the subagent result.")] = None,
@@ -123,7 +127,7 @@ def subagent_run(
     selected_backend = _backend()
     role_obj = get_role(role)
     if role_obj is None:
-        raise ValueError(f"Unknown role '{role}'. Available roles: explorer, reviewer, planner")
+        raise ValueError(f"Unknown role '{role}'. Available roles: {_available_roles_text()}")
 
     task_obj = _MANAGER.create_task(role, task, selected_backend, context, deliverable)
 
@@ -239,8 +243,8 @@ def register(mcp):
     configure_runtime(client_capabilities=None)
     base = (
         "Delegate multi-step work to an internal subagent contract with stable status shapes. "
-        "Use this for broad searches, independent reviews, and summaries of large inputs; "
-        "avoid it for single quick lookups. "
+        "Default to orchestration-first behavior: keep parent context minimal and delegate analysis, planning, implementation, and review to subagents whenever a task is not a single quick lookup. "
+        "Use this especially for broad searches, independent reviews, summaries of large inputs, and any change touching multiple files or steps. "
         "When status is completed, consume result; when running, poll subagent_status; "
         "when delegated_to_host, follow instructions then call subagent_complete."
     )

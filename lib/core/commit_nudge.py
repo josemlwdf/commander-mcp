@@ -80,7 +80,7 @@ STATE = CommitTrackerState()
 STATE_LOCK = threading.Lock()
 DEFER_LOG: list[dict[str, Any]] = []
 
-_WRITE_TOOLS = frozenset({"apply_edits"})
+_WRITE_TOOLS = frozenset({"apply_edits", "create_file"})
 _CHECK_TOOLS = frozenset({"run_tests", "code_get_diagnostics", "code_format_lint"})
 _IGNORE_PATH_PATTERNS = (
     "**/package-lock.json",
@@ -109,7 +109,11 @@ def _is_write_tool(tool_name: str, args: dict[str, Any]) -> bool:
 
 def _extract_touched_files(tool_name: str, args: dict[str, Any]) -> list[str]:
     touched: list[str] = []
-    if tool_name == "apply_edits":
+    if tool_name == "create_file":
+        path = args.get("path")
+        if isinstance(path, str):
+            touched.append(path)
+    elif tool_name == "apply_edits":
         for edit in args.get("edits") or []:
             path = getattr(edit, "path", None)
             if path is None and isinstance(edit, dict):

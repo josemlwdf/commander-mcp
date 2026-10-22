@@ -75,9 +75,12 @@ Alternatively, use the installed entry point:
 }
 ```
 
-The server registers `read_files`, `apply_edits`, `terminal_exec`, `code_search_ripgrep`, `find_files`, `code_get_diagnostics`, `run_tests`, `git_manage`, `defer_commit`, `lsp_symbol_lookup`, `vector_search_codebase`, `code_format_lint`, `web_fetch_docs`, `debug_session_step`, `browser_action`, `get_capabilities`, `skills_manage`, `subagent_run`, `subagent_status`, `subagent_result`, `subagent_complete`, and `subagent_cancel`.
+The server registers `read_files`, `create_file`, `apply_edits`, `terminal_exec`, `search_text`, `code_search_ripgrep` (deprecated alias), `find_files`, `code_get_diagnostics`, `run_tests`, `git_manage`, `defer_commit`, `get_capabilities`, `skills_manage`, `orchestrator_bootstrap`, `orchestrator_update_task_status`, `lsp_symbol_lookup`, `vector_search_codebase`, `code_format_lint`, `web_fetch_docs`, `debug_session_step`, `browser_action`, `subagent_run`, `subagent_status`, `subagent_result`, `subagent_complete`, and `subagent_cancel`.
 
 Tool modules are organized by tier: Tier 1 tools live in `lib/core`, and optional Tier 2 tools live in `lib/extras`.
+
+For optional-feature setup (LSP, DAP, browser automation, semantic search, and external search), see [SETUP.md](docs/SETUP.md). For the canonical registered-tool list, see [docs/TOOL_INVENTORY.md](docs/TOOL_INVENTORY.md).
+
 
 ### Check a stdio connection
 
@@ -102,11 +105,38 @@ The check initializes the server, lists registered tool names, and calls `read_f
 
 Use workspace-relative paths, which resolve from the configured `--root`. Path operations are strictly validated against that root before any filesystem access occurs. Read and edit responses retain their existing `path` field and include `resolved_path`. `read_files` returns `total_lines`, `applied_start`, and `applied_end` alongside the content.
 
-`apply_edits` validates and stages the entire batch of edits in memory before writing any changes to disk. If any edit in the batch contains an invalid regular expression, fails to match, or encounters a filesystem write failure, all changes are rolled back so no partial edits remain applied. The `old_str` parameter is a Python regular expression pattern used to locate text, while `new_str` is treated as literal replacement text (escape sequences and backreferences are not interpreted).
+`apply_edits` validates and stages the entire batch of edits in memory before writing any changes to disk. If any edit in the batch contains an invalid regular expression, fails to match, or encounters a filesystem write failure, all changes are rolled back so no partial edits remain applied. The `old_str` parameter is a Python regular expression pattern used to locate text, while `new_str` is treated as literal replacement text (escape sequences and backreferences are not interpreted unless `expand_groups=true`).
 
-`find_files` and `code_search_ripgrep` return successful partial results when a workspace directory cannot be scanned. Their `errors` arrays identify skipped workspace-relative paths and explain the filesystem error. `find_files` and repository discovery enforce time limits (15 seconds) and entry limits (5,000 directories/results), excluding common generated directories by default (`node_modules`, `__pycache__`, `.venv`, `dist`, `build`, etc.), and set `incomplete: true` if limits are hit. `code_search_ripgrep` returns a structured `{"error_code": "invalid_regex", ...}` if given an invalid regular expression, and supports optional `context_lines` returning `context_before` and `context_after`.
+If your client also exposes a separate `multi_edit` helper, use this quick guide:
 
-Unfiltered `run_tests` runs require a recognized test setup (for example, pytest configuration or actual test files); a generic `pyproject.toml` alone is not enough. Supplying both a framework and `filter_path` allows a targeted run without workspace-wide test discovery. `run_tests` parses test outcomes (e.g. `passed`, `failed`, `errors`, `skipped`) into a structured `parsed` metadata dictionary.
+| Tool | Match mode | Replacement mode | Best for |
+|---|---|---|---|
+| `multi_edit` (client helper) | Literal substring | Literal substring | Simple exact-text swaps |
+| `apply_edits` (this server) | Python `re` regex | Literal by default; regex-template when `expand_groups=true` | Structured/targeted edits with validation and match counts |
+
+`apply_edits` contract highlights:
+
+- Entire edit batches are validated and staged before write; failures leave files unchanged.
+- Edits are processed in input order against staged content; repeated or overlapping edits on the same file are order-sensitive.
+- `replace_all=false` replaces the first match per edit; `replace_all=true` replaces all matches.
+- `new_str` is literal unless `expand_groups=true`, where `\\1` and `\\g<name>` are expanded.
+- Errors are structured (`error_code`, `edit_index`, message) and include a unified diff for successful staged edits.
+
+`apply_edits` failure-mode matrix:
+
+| Scenario | Typical `error_code` | Outcome |
+|---|---|---|
+| Missing target file | `not_found` | Batch stops at that edit index; no files are written. |
+| Path escapes workspace root | `path_escape` | Batch stops; no files are written. |
+| Target is not a UTF-8 text file | `binary_file` | Batch stops; no files are written. |
+| Duplicate/overlapping edits where a later pattern no longer matches staged text | `no_match` | Batch stops at the failing edit; earlier staged changes are discarded (atomic rollback). |
+| Invalid regex in `old_str` | `invalid_regex` | Batch stops; no files are written. |
+| Invalid group reference/template with `expand_groups=true` | `invalid_replacement` | Batch stops; no files are written. |
+| Filesystem access/write failure | `io_error` (staging) or raised write failure with rollback | Any writes already performed are reverted to original content. |
+
+`find_files` and `code_search_ripgrep` (deprecated; prefer `search_text`) return successful partial results when a workspace directory cannot be scanned. Their `errors` arrays identify skipped workspace-relative paths and explain the filesystem error. `find_files` and repository discovery enforce time limits (15 seconds) and entry limits (5,000 directories/results), excluding common generated directories by default (`node_modules`, `__pycache__`, `.venv`, `dist`, `build`, etc.), and set `incomplete: true` if limits are hit. `code_search_ripgrep` returns a structured `{"error_code": "invalid_regex", ...}` if given an invalid regular expression, and supports optional `context_lines` returning `context_before` and `context_after`.
+
+Unfiltered `run_tests` runs require a recognized test setup (for example, pytest configuration or actual test files); a generic `pyproject.toml` alone is not enough. Supplying both a framework and `filter_path` allows a targeted run without workspace-wide test discovery. `run_tests` parses test outcomes (e.g. `passed`, `failed`, `errors`, `skipped`) into a structured `parsed` metadata dictionary, and for pytest may include `hints`/`preflight_notes` for common import-path issues. If tests import local modules (for example `from lib import support`), adding `test/__init__.py` is recommended for reliable collection across environments.
 
 `code_get_diagnostics` executes recipes and includes the process `exit_code` in its response. `code_format_lint` discloses which formatters and linters were run in `tools_run` and which were missing in `tools_skipped`. `web_fetch_docs` includes `http_status`, `final_url`, and a `truncated` boolean indicator in its response.
 
@@ -126,11 +156,13 @@ Names must be 1-64 characters of lowercase letters, digits and hyphens, which al
 
 Subagent tools provide a stable five-tool contract for delegated work without requiring any new credentials:
 
-- `subagent_run`: starts a task with a role (`explorer`, `reviewer`, or `planner`) and returns one of three statuses: `completed`, `running`, or `delegated_to_host`.
+- `subagent_run`: starts a task with a role (`generalist`, `coder`, `explorer`, `reviewer`, or `planner`) and returns one of three statuses: `completed`, `running`, or `delegated_to_host`.
 - `subagent_status`: checks the current task state and usage.
 - `subagent_result`: fetches the full or paged result text.
 - `subagent_complete`: closes a cooperative delegated frame.
 - `subagent_cancel`: cancels a task.
+
+Role tool access is scoped: `generalist`/`explorer` stay read-only, `reviewer` adds diagnostics/test execution, and `planner`/`coder` can also use `create_file` + `apply_edits` when the task requires writing files.
 
 Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, local Ollama when `SUBAGENT_LOCAL=1`, then `cooperative`.
 
@@ -143,7 +175,13 @@ Optional overrides:
 - `SUBAGENT_MODEL_OPENAI`, `SUBAGENT_MODEL_ANTHROPIC`, `SUBAGENT_MODEL_LOCAL` override default model ids per backend.
 - `SUBAGENT_SAMPLING_URL` (plus optional `SUBAGENT_SAMPLING_MODEL` and `SUBAGENT_SAMPLING_API_KEY`) enables HTTP sampling in runtimes without a native sampling bridge.
 
-Use subagents for broad searches, independent reviews, and large-input summaries; avoid delegation for single quick lookups.
+Use subagents for broad searches, independent reviews, and large-input summaries; avoid delegation only for single quick lookups. In practice, prefer an orchestrator-first style: keep parent context minimal and delegate most non-trivial work to subagents.
+
+### Orchestrator bootstrap
+
+`orchestrator_bootstrap` creates `.handy_coder/implementation-plan.md` and `.handy_coder/tasks.md` from a single high-level request. The generated tasks file uses `[ ]` placeholders with explicit status labels (`non_started`, `interrupted`, `complete`, `failed`) so an orchestrator can track progress while repeatedly spawning subagents.
+
+`orchestrator_update_task_status` atomically updates a single `[status: ...]` task line (selected by `line_number` or `task_contains`) without rewriting progress manually.
 
 ### Optional Tier 2 integrations
 
@@ -161,7 +199,7 @@ This server does not include the Tier 2 external MCP gateway tool.
 ## Security and limits
 
 - `--root` is the authorization boundary. Use workspace-relative file paths, which resolve from it. Read and edit responses include a `resolved_path`. Paths are validated lexically before any filesystem access: paths that reference parent directories (`../`), absolute paths, or home-directory expansions that would escape the authorized root are rejected immediately.
-- Shell execution in `terminal_exec` applies a heuristic lexical guard that rejects recognizable path escapes, home-directory references (`~`), and redirection targets that look like they escape the workspace root. This guard catches common patterns but is not a complete sandbox; it does not interpret shell variables or complex quoting. Avoid exposing this server to untrusted clients.
+- Shell execution in `terminal_exec` applies a heuristic lexical guard that rejects recognizable path escapes, home-directory references (`~`), common `$HOME`/`$PWD`-style escapes, and redirection targets that look like they escape the workspace root. This guard catches common patterns but is not a complete sandbox. Treat `terminal_exec` as trusted-input-only and use operating-system isolation if untrusted command input is possible.
 - File reads are capped at 2 MiB per file. Process output is capped at 1 MiB per stream.
 - **Worker deadline:** All tool calls (except `debug_session_step`) execute in an isolated worker subprocess. The default server-side deadline is **30 seconds**. `terminal_exec` may extend its own worker deadline by passing `timeout_ms`; the maximum accepted is 600,000 ms (10 minutes), adding a 5-second grace period over the subprocess deadline. Timed-out workers have their entire process group killed. `debug_session_step` runs in a long-lived supervised subprocess that preserves DAP session state across calls, with a 30-second deadline per action.
 - `find_files` and repository discovery impose a 15-second scan time limit and a 5,000-entry ceiling; results are marked `incomplete: true` if either limit is reached.

@@ -18,23 +18,25 @@ def _resolve_root(candidate: str | None = None) -> str:
     return detected or str(script_dir)
 
 
-try:
-    from mcp.server.fastmcp import FastMCP
-except ModuleNotFoundError as exc:
-    if exc.name != "mcp":
-        raise
-    print(
-        "[handy-coder-mcp] Missing required dependency 'mcp'. "
-        "Install the project with `python -m pip install .` using the "
-        "same Python interpreter configured for the MCP client.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1) from exc
+def _load_fastmcp():
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ModuleNotFoundError as exc:
+        if exc.name != "mcp":
+            raise
+        print(
+            "[handy-coder-mcp] Missing required dependency 'mcp'. "
+            "Install the project with `python -m pip install .` using the "
+            "same Python interpreter configured for the MCP client.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
+    return FastMCP
 
 from lib import support, worker_supervisor
 from lib.core import (
-    read_files, apply_edits, terminal_exec, code_search, find_files,
-    diagnostics, run_tests, git_manage, commit_nudge, system_info, skills,
+    read_files, create_file, apply_edits, terminal_exec, code_search, find_files,
+    diagnostics, run_tests, git_manage, commit_nudge, system_info, skills, orchestrator_bootstrap, orchestrator_tasks,
 )
 from lib.extras import (
     lsp_lookup, semantic_search, code_format_lint, web_fetch, debugger, browser,
@@ -58,11 +60,12 @@ def main() -> None:
     detected_ide = ide_detector.detect_ide()
     ide_info = f"; ide: {detected_ide}" if detected_ide else ""
     print(f"[handy-coder-mcp] Authorized root: {support.ROOT}; shell: {support.SHELL}{ide_info}", file=sys.stderr)
+    FastMCP = _load_fastmcp()
     mcp = FastMCP("handy-coder-mcp")
     for module in (
-        read_files, apply_edits, terminal_exec, code_search, find_files,
+        read_files, create_file, apply_edits, terminal_exec, code_search, find_files,
         diagnostics, run_tests, git_manage, commit_nudge, lsp_lookup, semantic_search,
-        code_format_lint, web_fetch, debugger, browser, system_info, skills, subagent_tools,
+        code_format_lint, web_fetch, debugger, browser, system_info, skills, orchestrator_bootstrap, orchestrator_tasks, subagent_tools,
     ):
         module.register(mcp)
 
