@@ -4,7 +4,8 @@ from __future__ import annotations
 import os
 import shutil
 
-from ..support import ROOT, describe
+from .. import support
+from ..support import describe
 
 
 def get_capabilities() -> dict:
@@ -87,7 +88,8 @@ def get_capabilities() -> dict:
     }
 
     return {
-        "workspace_root": str(ROOT),
+        # Read at call time: support.configure() rebinds support.ROOT after import.
+        "workspace_root": str(support.ROOT),
         "tools": tools,
         "env": {
             "HANDY_CODER_LSP_COMMAND": lsp_configured,

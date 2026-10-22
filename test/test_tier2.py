@@ -464,6 +464,19 @@ while True:
         self.assertFalse(result.get("ok"))
         self.assertTrue(any(r.get("error_code") == "tool_not_installed" for r in result["reports"]))
 
+    def test_capabilities_workspace_root_tracks_configured_root(self):
+        """workspace_root must reflect support.configure(), not the import-time ROOT."""
+        import tempfile as _tempfile
+        from lib import support as _support
+        from lib.core import system_info
+        with _tempfile.TemporaryDirectory() as tmp:
+            _support.configure(tmp)
+            try:
+                caps = system_info.get_capabilities()
+            finally:
+                _support.configure(str(Path(__file__).resolve().parents[1]))
+        self.assertEqual(caps["workspace_root"], str(Path(tmp).resolve()))
+
     def test_system_info_returns_expected_structure(self):
         """system_info.get_capabilities must return workspace_root, tools, and env."""
         from lib.core import system_info
