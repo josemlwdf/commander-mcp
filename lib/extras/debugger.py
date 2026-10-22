@@ -317,6 +317,8 @@ def register(mcp):
         if endpoint is None:
             return {
                 "supported": False,
+                "error_code": "not_configured",
+                "env_var": "HANDY_CODER_DAP_PORT",
                 "message": "Set HANDY_CODER_DAP_PORT and configure a local DAP adapter to enable debugging.",
             }
         # Validate cross-field constraint only after confirming the tool is configured.

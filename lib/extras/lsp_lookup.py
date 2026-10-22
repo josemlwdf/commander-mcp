@@ -120,7 +120,12 @@ def lsp_symbol_lookup(
         # before spending effort validating arguments.
         configured = os.environ.get("HANDY_CODER_LSP_COMMAND", "").strip()
         if not configured:
-            return {"supported": False, "message": "Set HANDY_CODER_LSP_COMMAND to a local language-server command to enable LSP lookup."}
+            return {
+                "supported": False,
+                "error_code": "not_configured",
+                "env_var": "HANDY_CODER_LSP_COMMAND",
+                "message": "Set HANDY_CODER_LSP_COMMAND to a local language-server command to enable LSP lookup.",
+            }
         if not symbol_name.strip():
             raise ValueError("symbol_name cannot be empty")
         source = inside(path, must_exist=True)

@@ -30,11 +30,21 @@ def vector_search_codebase(
             raise ValueError("top_k must be between 1 and 20")
         model_path = os.environ.get("HANDY_CODER_EMBEDDING_MODEL", "").strip()
         if not model_path:
-            return {"supported": False, "message": "Set HANDY_CODER_EMBEDDING_MODEL to an already installed local model to enable semantic search."}
+            return {
+                "supported": False,
+                "error_code": "not_configured",
+                "env_var": "HANDY_CODER_EMBEDDING_MODEL",
+                "message": "Set HANDY_CODER_EMBEDDING_MODEL to an already installed local model to enable semantic search.",
+            }
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError:
-            return {"supported": False, "message": "Semantic search requires the optional sentence-transformers package; no dependency is installed automatically."}
+            return {
+                "supported": False,
+                "error_code": "dependency_missing",
+                "package": "sentence-transformers",
+                "message": "Semantic search requires the optional sentence-transformers package; no dependency is installed automatically.",
+            }
 
         model = SentenceTransformer(model_path, local_files_only=True)
         paths = []

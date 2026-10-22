@@ -464,6 +464,52 @@ while True:
         self.assertFalse(result.get("ok"))
         self.assertTrue(any(r.get("error_code") == "tool_not_installed" for r in result["reports"]))
 
+    def _assert_unavailable(self, result, code, **fields):
+        self.assertFalse(result["supported"])
+        self.assertEqual(result.get("error_code"), code)
+        self.assertTrue(result.get("message"))
+        for key, value in fields.items():
+            self.assertEqual(result.get(key), value)
+            self.assertIn(value, result["message"])
+
+    def test_unavailable_optional_tools_return_error_code_and_remedy(self):
+        """Unconfigured vs missing-package must be distinguishable without parsing prose."""
+        import sys
+        from unittest.mock import MagicMock
+
+        with patch.dict(os.environ, {"HANDY_CODER_LSP_COMMAND": ""}):
+            result = self.tools.tools["lsp_symbol_lookup"](
+                "main", "README.md", lsp_lookup.Position(line=0, character=0)
+            )
+        self._assert_unavailable(result, "not_configured", env_var="HANDY_CODER_LSP_COMMAND")
+
+        with patch.dict(os.environ, {"HANDY_CODER_DAP_PORT": ""}):
+            result = self.tools.tools["debug_session_step"]("start")
+        self._assert_unavailable(result, "not_configured", env_var="HANDY_CODER_DAP_PORT")
+
+        with patch.dict(os.environ, {"HANDY_CODER_EMBEDDING_MODEL": ""}):
+            result = self.tools.tools["vector_search_codebase"]("anything")
+        self._assert_unavailable(result, "not_configured", env_var="HANDY_CODER_EMBEDDING_MODEL")
+
+        with patch.dict(os.environ, {"HANDY_CODER_EMBEDDING_MODEL": "some-model"}), \
+             patch.dict(sys.modules, {"sentence_transformers": None}):
+            result = self.tools.tools["vector_search_codebase"]("anything")
+        self._assert_unavailable(result, "dependency_missing", package="sentence-transformers")
+
+        with patch.dict(sys.modules, {"playwright": None, "playwright.sync_api": None}):
+            result = self.tools.tools["browser_action"]("get_html")
+        self._assert_unavailable(result, "dependency_missing", package="playwright")
+
+        fake_api = MagicMock()
+        fake_api.sync_playwright.return_value.start.return_value.chromium.launch.side_effect = (
+            Exception("Executable doesn't exist")
+        )
+        with patch.dict(sys.modules, {"playwright": MagicMock(), "playwright.sync_api": fake_api}):
+            result = self.tools.tools["browser_action"]("get_html")
+        self.assertFalse(result["supported"])
+        self.assertEqual(result.get("error_code"), "browser_launch_failed")
+        self.assertIn("playwright install chromium", result["message"])
+
     def test_capabilities_workspace_root_tracks_configured_root(self):
         """workspace_root must reflect support.configure(), not the import-time ROOT."""
         import tempfile as _tempfile

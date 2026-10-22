@@ -100,9 +100,23 @@ def browser_action(
                 _safe_url(url)
             if action == "click" and not selector:
                 raise ValueError("selector is required for click")
-            page = _ensure_page()
+            try:
+                page = _ensure_page()
+            except Exception as exc:
+                # _ensure_page already cleaned up; report instead of leaking a raw traceback.
+                detail = (str(exc).splitlines() or [type(exc).__name__])[0]
+                return {
+                    "supported": False,
+                    "error_code": "browser_launch_failed",
+                    "message": f"Chromium could not be launched ({detail}). Run 'playwright install chromium' and try again.",
+                }
             if page is None:
-                return {"supported": False, "message": "Install the optional Playwright package and Chromium browser to enable browser automation."}
+                return {
+                    "supported": False,
+                    "error_code": "dependency_missing",
+                    "package": "playwright",
+                    "message": "Install the optional playwright package and Chromium browser to enable browser automation.",
+                }
             if action == "navigate":
                 response = page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 return {
