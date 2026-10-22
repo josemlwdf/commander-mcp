@@ -57,7 +57,14 @@ def apply_edits(
         try:
             rx = re.compile(pattern)
         except re.error as exc:
-            raise ValueError(f"[edit {edit_index}] Invalid regular expression in old_str: {exc}")
+            # Nothing has been written yet (staging phase), so no rollback is needed.
+            return {
+                "error_code": "invalid_regex",
+                "edit_index": edit_index,
+                "message": f"[edit {edit_index}] Invalid regular expression in old_str: {exc}",
+                "edits": [],
+                "dry_run": dry_run,
+            }
 
         pos = edit.position
         match_count = 0
@@ -121,6 +128,7 @@ def register(mcp):
         "Validates and stages the entire batch before writing; a later invalid edit leaves earlier edits unapplied. "
         "old_str is a Python regular expression pattern (re module); new_str is literal replacement text. "
         "Error messages include the zero-based edit index ([edit N]) for easy identification. "
+        "An invalid regular expression returns error_code='invalid_regex' with edit_index and message instead of raising; nothing is written. "
         "Each result entry includes matches (count of replacements made) and a unified diff. "
         "Returns unified diffs. When to use: Make localized changes."
     ))(apply_edits)

@@ -608,6 +608,22 @@ class CoreFeedbackTests(unittest.TestCase):
             ])
         self.assertIn("[edit 1]", str(ctx.exception))
 
+    def test_apply_edits_returns_invalid_regex_error_code(self):
+        """An invalid regex must yield a structured error, not an exception, and write nothing."""
+        f = self.root / "rx.txt"
+        f.write_text("hello world\n", encoding="utf-8")
+
+        result = self.mcp.tools["apply_edits"]([
+            apply_edits.Edit(path="rx.txt", old_str="hello", new_str="hi"),
+            apply_edits.Edit(path="rx.txt", old_str="(unclosed", new_str="x"),
+        ])
+
+        self.assertEqual(result.get("error_code"), "invalid_regex")
+        self.assertEqual(result.get("edit_index"), 1)
+        self.assertIn("[edit 1]", result.get("message", ""))
+        self.assertEqual(result.get("edits"), [])
+        self.assertEqual(f.read_text(encoding="utf-8"), "hello world\n")
+
     def test_apply_edits_returns_match_count(self):
         """Each result entry must include matches with the replacement count."""
         f = self.root / "multi.txt"

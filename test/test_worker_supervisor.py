@@ -175,8 +175,9 @@ class WorkerSupervisorTests(unittest.TestCase):
                 apply_edits.Edit(path="test_stage_1.txt", old_str="apple", new_str="orange"),
                 apply_edits.Edit(path="test_stage_2.txt", old_str="[invalid regex", new_str="parrot"),
             ]
-            with self.assertRaises(Exception):
-                apply_edits.apply_edits(edits=edits)
+            result = apply_edits.apply_edits(edits=edits)
+            self.assertEqual(result.get("error_code"), "invalid_regex")
+            self.assertEqual(result.get("edit_index"), 1)
 
             # Check that first file was untouched
             self.assertEqual(f1.read_text(encoding="utf-8"), "apple banana")
