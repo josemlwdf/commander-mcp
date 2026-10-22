@@ -41,6 +41,11 @@ def _skipped(tool: str, reason: str = "not_installed") -> dict:
     return {"tool": tool, "reason": reason}
 
 
+def _language_error(code: str, message: str) -> dict:
+    """Structured result for a language-selection failure (no tool was run)."""
+    return {"supported": True, "ok": False, "error_code": code, "message": message}
+
+
 def _unified_diff(before: str, after: str, path: str) -> str:
     return "".join(difflib.unified_diff(
         before.splitlines(True),
@@ -85,11 +90,13 @@ def code_format_lint(
                 language = "javascript"
             else:
                 if suffixes and suffixes <= PYTHON_SUFFIXES | JS_SUFFIXES:
-                    raise ValueError(
+                    return _language_error(
+                        "mixed_languages",
                         "Paths contain both Python and JavaScript/TypeScript files. "
                         "Separate them into two calls or specify language explicitly."
                     )
-                raise ValueError(
+                return _language_error(
+                    "unsupported_language",
                     f"Could not infer a supported language from extensions: "
                     f"{', '.join(sorted(suffixes) or ['(none)'])}. "
                     "Supported: .py (python) and "
@@ -99,7 +106,7 @@ def code_format_lint(
             suffixes = {path.suffix.lower() for path in resolved if path.is_file()}
             supported_suffixes = PYTHON_SUFFIXES if language == "python" else JS_SUFFIXES
             if suffixes and not suffixes <= supported_suffixes:
-                raise ValueError(f"Paths do not all match the selected {language} language")
+                return _language_error("language_mismatch", f"Paths do not all match the selected {language} language")
 
         # Snapshot originals for diff computation when fix=True.
         originals: dict[str, str] = {}
@@ -188,6 +195,7 @@ def register(mcp):
         "ok is true when all tools ran successfully (exit_code 0). "
         "tools_skipped entries include the tool name and the reason (e.g. not_installed). "
         "Report entries include error_code='tool_not_installed' when a tool binary cannot be started. "
+        "Language selection failures return ok=false with error_code mixed_languages, unsupported_language or language_mismatch and a message; no tool is run. "
         "When fix=true, diffs contains unified diffs of changed files. "
         "When to use: Check or format selected files."
     ))(code_format_lint)

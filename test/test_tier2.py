@@ -283,12 +283,14 @@ while True:
         with _tempfile.TemporaryDirectory() as tmp:
             from lib import support as _support
             _support.configure(tmp)
-            (Path(tmp) / "a.py").write_text("x=1", encoding="utf-8")
-            (Path(tmp) / "b.js").write_text("var x=1;", encoding="utf-8")
-            with self.assertRaises(ValueError) as ctx:
-                self.tools.tools["code_format_lint"](["a.py", "b.js"])
-            _support.configure(str(Path(__file__).resolve().parents[1]))
-        self.assertIn("Python", str(ctx.exception))
+            try:
+                (Path(tmp) / "a.py").write_text("x=1", encoding="utf-8")
+                (Path(tmp) / "b.js").write_text("var x=1;", encoding="utf-8")
+                result = self.tools.tools["code_format_lint"](["a.py", "b.js"])
+            finally:
+                _support.configure(str(Path(__file__).resolve().parents[1]))
+        self.assertEqual(result.get("error_code"), "mixed_languages")
+        self.assertIn("Python", result["message"])
 
     def test_format_lint_unsupported_extension_gives_clear_error(self):
         """An unsupported extension (e.g. .txt) must give a message listing extensions."""
@@ -296,11 +298,13 @@ while True:
         with _tempfile.TemporaryDirectory() as tmp:
             from lib import support as _support
             _support.configure(tmp)
-            (Path(tmp) / "notes.txt").write_text("hello", encoding="utf-8")
-            with self.assertRaises(ValueError) as ctx:
-                self.tools.tools["code_format_lint"](["notes.txt"])
-            _support.configure(str(Path(__file__).resolve().parents[1]))
-        msg = str(ctx.exception)
+            try:
+                (Path(tmp) / "notes.txt").write_text("hello", encoding="utf-8")
+                result = self.tools.tools["code_format_lint"](["notes.txt"])
+            finally:
+                _support.configure(str(Path(__file__).resolve().parents[1]))
+        self.assertEqual(result.get("error_code"), "unsupported_language")
+        msg = result["message"]
         self.assertIn(".txt", msg)
         self.assertNotIn("Python", msg)  # not a mixed-language error
 
@@ -364,6 +368,31 @@ while True:
             result = web_fetch._fetch("https://example.com/code")
         self.assertIn("```", result["content"])
         self.assertIn("def foo():", result["content"])
+
+    def test_format_lint_language_errors_return_error_codes(self):
+        """Language selection failures must return distinct structured codes."""
+        import tempfile as _tempfile
+        from lib import support as _support
+        with _tempfile.TemporaryDirectory() as tmp:
+            _support.configure(tmp)
+            try:
+                (Path(tmp) / "a.py").write_text("x=1\n", encoding="utf-8")
+                (Path(tmp) / "b.js").write_text("var x=1;\n", encoding="utf-8")
+                (Path(tmp) / "notes.txt").write_text("hi\n", encoding="utf-8")
+                cases = [
+                    (["a.py", "b.js"], "auto", "mixed_languages"),
+                    (["notes.txt"], "auto", "unsupported_language"),
+                    (["b.js"], "python", "language_mismatch"),
+                ]
+                for paths, language, code in cases:
+                    with self.subTest(code=code):
+                        result = self.tools.tools["code_format_lint"](paths, language=language)
+                        self.assertEqual(result.get("error_code"), code)
+                        self.assertFalse(result.get("ok"))
+                        self.assertTrue(result.get("message"))
+                        self.assertNotIn(tmp, result["message"])
+            finally:
+                _support.configure(str(Path(__file__).resolve().parents[1]))
 
     def test_format_lint_ok_true_when_reports_pass(self):
         """ok must be True when all tools run and exit with code 0."""
