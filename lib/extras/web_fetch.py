@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import socket
 from html.parser import HTMLParser
 from typing import Annotated
@@ -43,13 +44,25 @@ class _SafeRedirect(HTTPRedirectHandler):
 
 
 class _TextExtractor(HTMLParser):
+    """HTML to text. <pre> becomes a fenced block, inline <code> gets single backticks.
+
+    Output is kept as ordered (kind, pieces) segments so whitespace can be collapsed
+    in prose without touching the content of code blocks.
+    """
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.hidden = 0
-        self.parts = []
+        self.segments: list[tuple[str, list[str]]] = []
         self.title = []
         self.in_title = False
-        self._pre_depth = 0   # inside <pre> or <code> blocks — preserve whitespace
+        self._pre_depth = 0   # inside <pre>: preserve whitespace, emit one fence
+
+    def _add(self, kind: str, text: str) -> None:
+        if self.segments and self.segments[-1][0] == kind:
+            self.segments[-1][1].append(text)
+        else:
+            self.segments.append((kind, [text]))
 
     def handle_starttag(self, tag, attrs):
         tag_l = tag.lower()
@@ -57,12 +70,20 @@ class _TextExtractor(HTMLParser):
             self.hidden += 1
         if tag_l == "title":
             self.in_title = True
-        if tag_l in ("pre", "code"):
+        if self.hidden:
+            return
+        if tag_l == "pre":
             self._pre_depth += 1
-            self.parts.append("\n```\n")
+            return
+        if self._pre_depth:
+            if tag_l == "br":
+                self._add("code", "\n")
+            return
+        if tag_l == "code":
+            self._add("text", "`")
             return
         if tag_l in ("p", "br", "div", "li", "h1", "h2", "h3", "tr"):
-            self.parts.append("\n")
+            self._add("text", "\n")
 
     def handle_endtag(self, tag):
         tag_l = tag.lower()
@@ -70,19 +91,48 @@ class _TextExtractor(HTMLParser):
             self.hidden -= 1
         if tag_l == "title":
             self.in_title = False
-        if tag_l in ("pre", "code"):
-            if self._pre_depth > 0:
+        if self.hidden:
+            return
+        if tag_l == "pre":
+            if self._pre_depth:
                 self._pre_depth -= 1
-            self.parts.append("\n```\n")
+            return
+        if self._pre_depth:
+            return
+        if tag_l == "code":
+            self._add("text", "`")
             return
         if tag_l in ("p", "div", "li", "h1", "h2", "h3", "tr"):
-            self.parts.append("\n")
+            self._add("text", "\n")
 
     def handle_data(self, data):
         if self.in_title:
             self.title.append(data)
-        if not self.hidden:
-            self.parts.append(data)
+        if self.hidden:
+            return
+        if self._pre_depth:
+            self._add("code", data)
+        else:
+            # Collapse whitespace runs; drop the pilcrow used for heading permalinks.
+            self._add("text", re.sub(r"\s+", " ", data).replace("\u00b6", ""))
+
+    def text(self) -> str:
+        out = ""
+        for kind, pieces in self.segments:
+            chunk = "".join(pieces)
+            if kind == "code":
+                if out and not out.endswith("\n"):
+                    out += "\n"
+                out += "```\n" + chunk.strip("\n") + "\n```\n"
+            else:
+                chunk = re.sub(r"[ \t]*\n[ \t]*", "\n", chunk)
+                chunk = re.sub(r"\n{3,}", "\n\n", chunk)
+                if out.endswith("\n"):
+                    chunk = chunk.lstrip("\n")
+                out += chunk
+        # Text chunks are collapsed individually above; a global pass here would
+        # also squash blank lines inside fenced code.
+        return out.strip()
 
 
 def _request(url: str) -> tuple[bytes, str, str, int, bool]:
@@ -110,9 +160,7 @@ def _fetch(url: str, offset: int = 0) -> dict:
     if content_type in ("text/html", "application/xhtml+xml"):
         parser = _TextExtractor()
         parser.feed(decoded)
-        # For pre/code blocks we preserve whitespace; for other content we collapse runs.
-        # Rebuild by collapsing only runs outside code fences.
-        raw_text = "".join(parser.parts)
+        raw_text = parser.text()
         title = " ".join(" ".join(parser.title).split())
     else:
         if not content_type.startswith("text/") and content_type not in ("application/json", "application/xml"):
@@ -191,7 +239,8 @@ def register(mcp):
         "Response includes http_status, final_url, total_length, and truncated flag. "
         "Use offset to page through content beyond the initial 20 000-character window; "
         "next_offset in the response is the value to pass on the next call (null when no more content). "
-        "HTML <pre> and <code> blocks are preserved as fenced Markdown code blocks. "
+        "HTML <pre> blocks are preserved as fenced Markdown code blocks and inline <code> as `backticks`; "
+        "whitespace outside code is collapsed. "
         "When to use: Read external documentation or find web pages."
     ))(web_fetch_docs)
 

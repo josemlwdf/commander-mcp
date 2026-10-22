@@ -369,6 +369,39 @@ while True:
         self.assertIn("```", result["content"])
         self.assertIn("def foo():", result["content"])
 
+    def _fetch_html(self, html: bytes) -> str:
+        with patch.object(web_fetch, "_request", return_value=(
+            html, "https://example.com/x", "text/html", 200, False,
+        )):
+            return web_fetch._fetch("https://example.com/x")["content"]
+
+    def test_web_fetch_inline_code_uses_backticks_not_fences(self):
+        content = self._fetch_html(b"<html><p>Use <code>foo()</code> here.</p></html>")
+        self.assertIn("Use `foo()` here.", content)
+        self.assertNotIn("```", content)
+
+    def test_web_fetch_pre_code_gets_a_single_fence(self):
+        content = self._fetch_html(b"<html><pre><code>x = 1</code></pre></html>")
+        self.assertEqual(content.count("```"), 2)
+        self.assertIn("x = 1", content)
+
+    def test_web_fetch_strips_permalink_pilcrow(self):
+        content = self._fetch_html(
+            b'<html><h2>Install<a class="headerlink" href="#install">\xc2\xb6</a></h2></html>'
+        )
+        self.assertIn("Install", content)
+        self.assertNotIn("\u00b6", content)
+
+    def test_web_fetch_collapses_blank_lines_outside_code_only(self):
+        content = self._fetch_html(
+            b"<html><p>One</p>\n\n\n<div></div><div></div><p>a    b\n   c</p>"
+            b"<pre>x\n\n\n\ny</pre></html>"
+        )
+        outside, _, rest = content.partition("```")
+        self.assertNotIn("\n\n\n", outside)
+        self.assertIn("a b c", outside)
+        self.assertIn("x\n\n\n\ny", rest)  # fenced whitespace is preserved
+
     def test_format_lint_language_errors_return_error_codes(self):
         """Language selection failures must return distinct structured codes."""
         import tempfile as _tempfile
