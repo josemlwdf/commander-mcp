@@ -14,6 +14,7 @@ from lib.core import (
     git_manage,
     read_files,
     run_tests,
+    system_info,
     terminal_exec,
 )
 from lib.extras import (
@@ -59,6 +60,7 @@ class ToolSchemaTests(unittest.TestCase):
             git_manage,
             read_files,
             run_tests,
+            system_info,
             terminal_exec,
             browser,
             code_format_lint,
@@ -70,7 +72,7 @@ class ToolSchemaTests(unittest.TestCase):
             module.register(cls.mcp)
 
     def test_every_tool_and_argument_has_a_description(self):
-        self.assertEqual(len(self.mcp.tools), 14)
+        self.assertEqual(len(self.mcp.tools), 15)
         for name, function in self.mcp.tools.items():
             with self.subTest(tool=name):
                 self.assertTrue(self.mcp.descriptions[name].strip())

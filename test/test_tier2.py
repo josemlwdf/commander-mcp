@@ -402,6 +402,17 @@ while True:
         self.assertFalse(result.get("ok"))
         self.assertTrue(any(r.get("error_code") == "tool_not_installed" for r in result["reports"]))
 
+    def test_system_info_returns_expected_structure(self):
+        """system_info.get_capabilities must return workspace_root, tools, and env."""
+        from lib.core import system_info
+        caps = system_info.get_capabilities()
+        self.assertIn("workspace_root", caps)
+        self.assertIn("tools", caps)
+        self.assertIn("env", caps)
+        self.assertIn("read_files", caps["tools"])
+        self.assertIn("apply_edits", caps["tools"])
+        self.assertIn("terminal_exec", caps["tools"])
+
 
 if __name__ == "__main__":
     unittest.main()
