@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from pydantic import Field
-from ..support import describe
+from ..support import describe, setup_required
 
 
 _LOCK = threading.Lock()
@@ -105,22 +105,21 @@ def browser_action(
             except Exception as exc:
                 # _ensure_page already cleaned up; report instead of leaking a raw traceback.
                 detail = (str(exc).splitlines() or [type(exc).__name__])[0]
-                return {
-                    "supported": False,
-                    "error_code": "browser_launch_failed",
-                    "message": f"Chromium could not be launched ({detail}). Run 'playwright install chromium' and try again.",
-                    "hint": "Install Chromium for Playwright in the same Python environment used by the server.",
-                    "next_step": "See docs/SETUP.md#browser-automation-browser_action for setup instructions.",
-                }
+                return setup_required(
+                    missing_requirements=["binary:chromium"],
+                    remediation_commands=["python -m playwright install chromium"],
+                    documentation_url="docs/SETUP.md#browser-automation-browser_action",
+                    message=f"Chromium could not be launched ({detail}).",
+                    error_code="browser_launch_failed",
+                )
             if page is None:
-                return {
-                    "supported": False,
-                    "error_code": "dependency_missing",
-                    "package": "playwright",
-                    "message": "Install the optional playwright package and Chromium browser to enable browser automation.",
-                    "hint": "Run: python -m pip install playwright && python -m playwright install chromium",
-                    "next_step": "See docs/SETUP.md#browser-automation-browser_action for setup instructions.",
-                }
+                return setup_required(
+                    missing_requirements=["python-package:playwright", "binary:chromium"],
+                    remediation_commands=["python -m pip install playwright", "python -m playwright install chromium"],
+                    documentation_url="docs/SETUP.md#browser-automation-browser_action",
+                    message="Install the optional Playwright package and Chromium browser to enable browser automation.",
+                    error_code="dependency_missing",
+                )
             if action == "navigate":
                 response = page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 return {

@@ -159,7 +159,7 @@ class WorkerSupervisorTests(unittest.TestCase):
                 test_file.unlink()
 
     def test_code_search_returns_error_code_for_invalid_regex(self):
-        res = code_search.code_search_ripgrep("[unclosed bracket")
+        res = code_search.search_text("[unclosed bracket")
         self.assertEqual(res.get("error_code"), "invalid_regex")
         self.assertIn("message", res)
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import difflib
+import os
 import shutil
 from pathlib import Path
 from typing import Annotated, Literal
@@ -34,6 +35,22 @@ def _tool_path(name: str, root: Path) -> str | None:
         return str(inside(local, must_exist=True))
     except ValueError:
         return None
+
+
+def _python_tool_path(name: str, root: Path) -> str | None:
+    """Prefer Python tools installed in this workspace's virtual environment."""
+    venv_dirs = (root / ".venv" / "bin", root / "venv" / "bin")
+    if os.name == "nt":
+        venv_dirs += (root / ".venv" / "Scripts", root / "venv" / "Scripts")
+    for directory in venv_dirs:
+        executable = directory / name
+        if executable.is_file():
+            return str(executable)
+        if os.name == "nt":
+            executable = executable.with_suffix(".exe")
+            if executable.is_file():
+                return str(executable)
+    return shutil.which(name)
 
 
 def _skipped(tool: str, reason: str = "not_installed") -> dict:
@@ -74,6 +91,9 @@ def code_format_lint(
             "Specify a language for directories or when auto cannot infer."
         )),
     ] = "auto",
+    config_file: Annotated[str | None, Field(description="Optional workspace-relative formatter/linter config file.")] = None,
+    ignore: Annotated[list[str] | None, Field(description="Optional rule codes to ignore for Ruff.")] = None,
+    severity: Annotated[Literal["all", "error", "warning"], Field(description="Ruff severity filter; all by default.")] = "all",
 ) -> dict:
         if not paths:
             raise ValueError("paths must contain at least one workspace path")
@@ -119,23 +139,24 @@ def code_format_lint(
                         pass
 
         args = [str(path) for path in resolved]
+        config_path = str(inside(config_file, must_exist=True)) if config_file else None
         root = inside(".")
         reports = []
         tools_run = []
         tools_skipped = []
         if language == "python":
-            ruff = shutil.which("ruff")
-            black = shutil.which("black")
+            ruff = _python_tool_path("ruff", root)
+            black = _python_tool_path("black", root)
             if ruff:
                 tools_run.append("ruff")
                 reports.append({"tool": "ruff", **_run(ruff, ["check", *(["--fix"] if fix else []), *args], root)})
                 tools_run.append("ruff-format")
                 format_args = ["format", *([] if fix else ["--check"]), *args]
                 reports.append({"tool": "ruff-format", **_run(ruff, format_args, root)})
-                if not shutil.which("black"):
+                if not black:
                     tools_skipped.append(_skipped("black"))
             elif black:
-                if not shutil.which("ruff"):
+                if not ruff:
                     tools_skipped.append(_skipped("ruff"))
                 tools_run.append("black")
                 command_args = ([] if fix else ["--check"]) + args

@@ -20,10 +20,20 @@ def read_files(
         list[LineRange] | None,
         Field(description="Optional 1-based line ranges for selected files. Each range is an object with keys: path (must match a path in paths), start (first line) and end (last line, >= start); files without a range are read in full."),
     ] = None,
+    start_line: Annotated[int | None, Field(ge=1, description="Shorthand first line for a single file; requires end_line.")] = None,
+    end_line: Annotated[int | None, Field(ge=1, description="Shorthand last line for a single file; requires start_line.")] = None,
+    encoding: Annotated[str, Field(description="Text encoding used to decode files; defaults to UTF-8.")] = "utf-8",
+    include_metadata: Annotated[bool, Field(description="Include file size in bytes and modification time metadata.")] = False,
 ) -> dict:
     if not paths:
         raise ValueError("paths must contain at least one workspace path")
+    if (start_line is None) != (end_line is None):
+        raise ValueError("start_line and end_line must be supplied together")
+    if start_line is not None and len(paths) != 1:
+        raise ValueError("start_line/end_line shorthand requires exactly one path")
     ranges = {r.path: r for r in (line_ranges or [])}
+    if start_line is not None:
+        ranges[paths[0]] = LineRange(path=paths[0], start=start_line, end=end_line)
     output = []
     file_errors: list[dict] = []
     for name in paths:
@@ -58,7 +68,7 @@ def read_files(
             file_errors.append({"path": name, "error_code": "file_too_large", "message": f"File exceeds 2 MiB read limit: {name}"})
             continue
         try:
-            full_content = p.read_text(encoding="utf-8")
+            full_content = p.read_text(encoding=encoding)
         except UnicodeDecodeError:
             file_errors.append({
                 "path": name,
@@ -72,6 +82,9 @@ def read_files(
             "path": str(p.relative_to(support.ROOT)),
             "total_lines": total_lines,
         }
+        if include_metadata:
+            stat = p.stat()
+            entry["metadata"] = {"size_bytes": stat.st_size, "modified_time": stat.st_mtime}
         if name in ranges:
             r = ranges[name]
             start = int(r.start)

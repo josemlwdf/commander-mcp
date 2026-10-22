@@ -277,12 +277,12 @@ class GitCheckoutSafetyTests(_WorkspaceTestCase):
 
 
 # ----------------------------------------------------------------------
-# code_search_ripgrep: truncation metadata and search scope
+# search_text: truncation metadata and search scope
 # ----------------------------------------------------------------------
 class CodeSearchTruncationTests(_WorkspaceTestCase):
     def test_control_untruncated_result_has_exact_counts(self):
         (self.root / "one.txt").write_text("needle\n", encoding="utf-8")
-        result = code_search.code_search_ripgrep("needle")
+        result = code_search.search_text("needle")
         self.assertFalse(result["truncated"])
         self.assertEqual(result["total_matches_seen"], 1)
         self.assertEqual(result["omitted_count"], 0)
@@ -290,7 +290,7 @@ class CodeSearchTruncationTests(_WorkspaceTestCase):
     def test_control_truncation_flag_and_reason_are_set(self):
         for i in range(5):
             (self.root / f"f{i}.txt").write_text("needle\n", encoding="utf-8")
-        result = code_search.code_search_ripgrep("needle", max_results=3)
+        result = code_search.search_text("needle", max_results=3)
         self.assertTrue(result["truncated"])
         self.assertEqual(result["truncation_reason"], "max_results")
         self.assertEqual(len(result["matches"]), 3)
@@ -298,13 +298,13 @@ class CodeSearchTruncationTests(_WorkspaceTestCase):
     def test_truncation_counts_matches_across_files_exactly(self):
         for i in range(5):
             (self.root / f"f{i}.txt").write_text("needle\n", encoding="utf-8")
-        result = code_search.code_search_ripgrep("needle", max_results=3)
+        result = code_search.search_text("needle", max_results=3)
         self.assertEqual(result["total_matches_seen"], 5)
         self.assertEqual(result["omitted_count"], 2)
 
     def test_truncation_counts_matches_within_a_single_file_exactly(self):
         (self.root / "big.txt").write_text("needle\n" * 10, encoding="utf-8")
-        result = code_search.code_search_ripgrep("needle", max_results=3)
+        result = code_search.search_text("needle", max_results=3)
         self.assertEqual(result["total_matches_seen"], 10)
         self.assertEqual(result["omitted_count"], 7)
 
@@ -313,7 +313,7 @@ class CodeSearchTruncationTests(_WorkspaceTestCase):
             target = self.root / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("needle\n", encoding="utf-8")
-        result = code_search.code_search_ripgrep("needle")
+        result = code_search.search_text("needle")
         self.assertEqual([m["path"] for m in result["matches"]], ["src/real.py"])
 
 

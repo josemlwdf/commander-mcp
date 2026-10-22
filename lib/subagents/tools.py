@@ -174,7 +174,7 @@ def subagent_result(
 
 def subagent_complete(
     task_id: Annotated[str, Field(description="Open delegated task id to complete in cooperative mode.")],
-    result: Annotated[str, Field(description="Final subagent result text. Must match the role's expected output format.")],
+    result: Annotated[str, Field(max_length=100000, description="Final subagent result text, at most 100,000 characters. Keep it concise or page supporting detail with subagent_result. Must match the role's expected output format.")],
 ) -> dict:
     task_obj = _MANAGER.get_task(task_id)
     if task_obj.backend != "cooperative":
@@ -200,16 +200,21 @@ def subagent_complete(
 
 def subagent_cancel(
     task_id: Annotated[str, Field(description="Task identifier to cancel.")],
+    reason: Annotated[str | None, Field(max_length=2000, description="Optional cancellation reason recorded with the task.")] = None,
+    confirm: Annotated[bool, Field(description="Must be true to confirm cancellation; false returns a confirmation-required response.")] = False,
 ) -> dict:
+    if not confirm:
+        return {"task_id": task_id, "cancelled": False, "confirmation_required": True, "message": "Call again with confirm=true to cancel this task."}
     if thread := _THREADS.get(task_id):
         if thread.is_alive():
             # Cancellation is cooperative: mark task and let running call end naturally.
             pass
-    task_obj = _MANAGER.cancel_task(task_id)
+    task_obj = _MANAGER.cancel_task(task_id, reason=reason)
     return {
         "task_id": task_obj.task_id,
         "state": task_obj.state,
         "backend": task_obj.backend,
+        **({"reason": reason} if reason else {}),
     }
 
 
@@ -246,7 +251,7 @@ def register(mcp):
         "Default to orchestration-first behavior: keep parent context minimal and delegate analysis, planning, implementation, and review to subagents whenever a task is not a single quick lookup. "
         "Use this especially for broad searches, independent reviews, summaries of large inputs, and any change touching multiple files or steps. "
         "When status is completed, consume result; when running, poll subagent_status; "
-        "when delegated_to_host, follow instructions then call subagent_complete."
+        "when delegated_to_host, follow instructions then call subagent_complete. Cooperative completion is host-driven and must be explicitly completed; streaming and checkpoint/resume are unsupported. Roles: generalist/explorer are read-only, reviewer adds diagnostics/tests, planner can also create/edit, coder can create/edit plus diagnostics/tests. Result pages include offset, total_length, and next_offset metadata."
     )
     mcp.tool(description=describe(base + " Start a task."))(subagent_run)
     mcp.tool(description=describe(base + " Check task state and usage."))(subagent_status)

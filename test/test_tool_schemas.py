@@ -7,6 +7,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from lib import support
 from lib.core import (
+    build_project,
     apply_edits,
     create_file,
     code_search,
@@ -66,6 +67,7 @@ class ToolSchemaTests(unittest.TestCase):
             find_files,
             commit_nudge,
             git_manage,
+            build_project,
             read_files,
             run_tests,
             skills,
@@ -203,6 +205,26 @@ class ToolSchemaTests(unittest.TestCase):
                 with self.subTest(tool=name, argument=parameter):
                     schema = TypeAdapter(hints[parameter]).json_schema()
                     check_schema(schema, f"{name}.{parameter}")
+
+    def test_audited_collection_shapes_and_position_keys_are_documented(self):
+        env_schema = TypeAdapter(get_type_hints(terminal_exec.terminal_exec, include_extras=True)["env"]).json_schema()
+        extensions_schema = TypeAdapter(get_type_hints(code_search.search_text, include_extras=True)["extensions"]).json_schema()
+        tags_schema = TypeAdapter(get_type_hints(skills.skills_manage, include_extras=True)["tags"]).json_schema()
+        self.assertEqual(env_schema["anyOf"][0]["type"], "object")
+        self.assertEqual(env_schema["anyOf"][0]["additionalProperties"]["type"], "string")
+        self.assertEqual(extensions_schema["anyOf"][0]["items"]["type"], "string")
+        self.assertEqual(tags_schema["anyOf"][0]["items"]["type"], "string")
+        self.assertIn('"MODE": "test"', self.mcp.descriptions["terminal_exec"])
+        self.assertIn('[".py", ".md"]', self.mcp.descriptions["search_text"])
+        hints = get_type_hints(apply_edits.apply_edits, include_extras=True)
+        edit_position = apply_edits.Edit.model_fields["position"].description
+        self.assertIn("line", edit_position)
+        self.assertIn("col", edit_position)
+        self.assertIn("line and col", str(hints["edits"].__metadata__[0].description))
+
+    def test_git_guidance_shows_repo_path_selection(self):
+        git_manage._set_inventory(("projects/api", "projects/web"), ())
+        self.assertIn("repo_path='projects/api'", git_manage._tool_description())
 
 
 if __name__ == "__main__":

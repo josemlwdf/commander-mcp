@@ -22,8 +22,8 @@ class ApplyEditsContractTests(unittest.TestCase):
 
         result = apply_edits.apply_edits(
             [
-                apply_edits.Edit(path="sample.txt", old_str="foo", new_str="bar"),
-                apply_edits.Edit(path="sample.txt", old_str="bar", new_str="baz"),
+                apply_edits.Edit(path="sample.txt", pattern="foo", replacement="bar"),
+                apply_edits.Edit(path="sample.txt", pattern="bar", replacement="baz"),
             ]
         )
 
@@ -36,8 +36,8 @@ class ApplyEditsContractTests(unittest.TestCase):
 
         result = apply_edits.apply_edits(
             [
-                apply_edits.Edit(path="overlap.txt", old_str="abc", new_str="x"),
-                apply_edits.Edit(path="overlap.txt", old_str="ab", new_str="y"),
+                apply_edits.Edit(path="overlap.txt", pattern="abc", replacement="x"),
+                apply_edits.Edit(path="overlap.txt", pattern="ab", replacement="y"),
             ]
         )
 
@@ -50,7 +50,7 @@ class ApplyEditsContractTests(unittest.TestCase):
         target.write_text("cat cat cat\n", encoding="utf-8")
 
         result = apply_edits.apply_edits(
-            [apply_edits.Edit(path="dupes.txt", old_str="cat", new_str="dog")],
+            [apply_edits.Edit(path="dupes.txt", pattern="cat", replacement="dog")],
             replace_all=False,
         )
 
@@ -62,53 +62,38 @@ class ApplyEditsContractTests(unittest.TestCase):
         target.write_text("cat cat cat\n", encoding="utf-8")
 
         result = apply_edits.apply_edits(
-            [apply_edits.Edit(path="dupes_all.txt", old_str="cat", new_str="dog")],
+            [apply_edits.Edit(path="dupes_all.txt", pattern="cat", replacement="dog")],
             replace_all=True,
         )
 
         self.assertEqual(result["edits"][0]["matches"], 3)
         self.assertEqual(target.read_text(encoding="utf-8"), "dog dog dog\n")
 
-    def test_new_str_is_literal_when_expand_groups_is_false(self):
+    def test_replacement_is_literal_when_expand_groups_is_false(self):
         target = self.root / "literal.txt"
         target.write_text("abc\n", encoding="utf-8")
 
         apply_edits.apply_edits(
-            [apply_edits.Edit(path="literal.txt", old_str="(a)(b)(c)", new_str=r"\3-\2-\1")],
+            [apply_edits.Edit(path="literal.txt", pattern="(a)(b)(c)", replacement=r"\3-\2-\1")],
             expand_groups=False,
         )
 
         self.assertEqual(target.read_text(encoding="utf-8"), "\\3-\\2-\\1\n")
 
-    def test_pattern_and_replacement_aliases_work(self):
-        target = self.root / "alias.txt"
-        target.write_text("hello world\n", encoding="utf-8")
+    def test_legacy_aliases_are_rejected(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            apply_edits.Edit(path="alias.txt", old_str="hello", new_str="hi")
 
+    def test_bounded_case_insensitive_replacements(self):
+        target = self.root / "bounded.txt"
+        target.write_text("Cat cat CAT\n", encoding="utf-8")
         result = apply_edits.apply_edits(
-            [apply_edits.Edit(path="alias.txt", pattern="hello", replacement="hi")]
+            [apply_edits.Edit(path="bounded.txt", pattern="cat", replacement="dog")],
+            replace_all=True, max_replacements=2, case_insensitive=True,
         )
-
-        self.assertNotIn("error_code", result)
-        self.assertEqual(target.read_text(encoding="utf-8"), "hi world\n")
-
-    def test_conflicting_alias_values_return_invalid_edit(self):
-        target = self.root / "conflict.txt"
-        target.write_text("hello\n", encoding="utf-8")
-
-        result = apply_edits.apply_edits(
-            [
-                apply_edits.Edit(
-                    path="conflict.txt",
-                    old_str="hello",
-                    pattern="world",
-                    new_str="x",
-                )
-            ]
-        )
-
-        self.assertEqual(result.get("error_code"), "invalid_edit")
-        self.assertEqual(result.get("edit_index"), 0)
-        self.assertEqual(target.read_text(encoding="utf-8"), "hello\n")
+        self.assertEqual(result["edits"][0]["matches"], 2)
+        self.assertEqual(target.read_text(encoding="utf-8"), "dog dog CAT\n")
 
 
 if __name__ == "__main__":

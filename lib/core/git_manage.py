@@ -107,7 +107,7 @@ def _tool_description() -> str:
             paths = "\n- " + "\n- ".join(f"'{path}'" for path in _REPOSITORIES)
             state = (
                 f"Multiple Git repositories are available at these workspace-relative paths:{paths}\n"
-                "For every action, set repo_path to the path of the repository to work on."
+                "For every action, set repo_path to the path of the repository to work on (for example, repo_path='projects/api')."
             )
         if _DISCOVERY_ERRORS:
             paths = ", ".join(error["path"] for error in _DISCOVERY_ERRORS)
@@ -124,7 +124,7 @@ def _tool_description() -> str:
             "they want a new repository initialized before calling git_manage with action='init'."
         )
     return describe(
-        "Run a validated workspace Git action: status, diff, log, add, commit, push, checkout, or init. "
+        "Run a validated workspace Git action: status, diff, log, add, commit, push, pull, merge, rebase, checkout, branch, stash, blame, or init. status returns structured staged/working-tree and untracked summaries; diff preserves raw text and accepts mode unstaged/staged/both plus repository-relative file_paths; log includes recent commit history. pull accepts an optional remote and branch; merge/rebase require one or more refs. These three actions require a clean worktree (including untracked files). "
         "Pass action-specific Git options as separate strings in args. "
         f"{state} Use workspace-relative repo_path when selecting a repository. "
         "When repo_path is given and has a .git marker, workspace scan is bypassed for faster execution. "
@@ -197,40 +197,47 @@ def _route_failure_to_stderr(result: dict) -> dict:
 
 def git_manage(
     action: Annotated[
-        Literal["status", "diff", "log", "add", "commit", "push", "checkout", "init"],
+        Literal["status", "diff", "log", "add", "commit", "push", "pull", "merge", "rebase", "checkout", "branch", "stash", "blame", "init"],
         Field(description=(
-            "Git operation to run. status and init take no args; diff and log accept "
-            "validated options; add requires one or more workspace-relative paths (options are rejected); commit requires -m and a message; push accepts optional remote/refspec arguments with limited flags; checkout requires "
-            "exactly one branch, tag, or commit (file paths are rejected with error_code not_a_ref). init initializes the workspace root or a repo_path subdirectory."
+            "Git operation to run. status and init take no args; diff accepts mode unstaged/staged/both and optional file_paths; diff and log accept "
+            "validated options; add requires one or more workspace-relative paths (options are rejected); commit requires -m and a message; push accepts optional remote/refspec arguments with limited flags; branch lists/creates, stash accepts list/push/pop/apply/drop, blame requires one relative file; checkout requires "
+            "exactly one branch, tag, or commit (file paths are rejected with error_code not_a_ref); pull accepts up to remote and branch; merge/rebase require refs. pull, merge, and rebase require a clean worktree. init initializes the workspace root or a repo_path subdirectory."
         )),
     ],
     args: Annotated[
         list[str] | None,
         Field(description=(
-            "Optional action-specific Git arguments, each as a separate string. "
+            "Optional action-specific Git arguments, each as a separate string. Relative file paths for add and diff are resolved against repo_path (or the selected repository) and must stay inside that repository. "
             "Use no arguments for status or init. diff supports --cached, --stat, "
             "--name-only, and workspace-relative paths after --; log supports -n, --oneline, "
             "--decorate, --all, --, and a count. commit requires ['-m', 'message'] "
-            "and optionally accepts -a; add takes one or more workspace-relative paths; push supports -u/--set-upstream, --force-with-lease, --tags, --dry-run plus optional <remote> <refspec>; checkout takes exactly one branch or ref."
+            "and optionally accepts -a; add takes one or more workspace-relative paths; push supports -u/--set-upstream, --force-with-lease, --tags, --dry-run plus optional <remote> <refspec>; checkout takes exactly one branch or ref. branch takes --list or one branch name; stash takes list/push/pop/apply/drop; blame takes one workspace-relative file path."
         )),
     ] = None,
     repo_path: Annotated[
         str | None,
         Field(description=(
             "Workspace-relative path to the Git repository root. Optional when one "
-            "repository is available, required when multiple repositories are found, "
+            "repository is available, required when multiple repositories are found. Relative paths are resolved from the workspace root. "
             "and, for init, optionally names the subdirectory to initialize (defaults to the workspace root)."
         )),
     ] = None,
+    mode: Annotated[Literal["unstaged", "staged", "both"], Field(description="Diff selection: unstaged, staged, or both. Applies to diff; ignored by other review actions.")] = "unstaged",
+    file_paths: Annotated[list[str] | None, Field(description="Optional repository-relative files to limit diff review; every path must remain within the selected repository.")] = None,
 ) -> dict:
     target_mcp = _MCP
     args = args or []
-    if action not in ("status", "diff", "log", "add", "commit", "push", "checkout", "init"):
+    file_paths = file_paths or []
+    if action not in ("status", "diff", "log", "add", "commit", "push", "pull", "merge", "rebase", "checkout", "branch", "stash", "blame", "init"):
         raise ValueError("Unsupported Git action")
     if action == "status" and args:
         raise ValueError("status accepts no args")
     if action == "init" and args:
         raise ValueError("init accepts no args")
+    if action != "diff" and (mode != "unstaged" or file_paths):
+        raise ValueError("mode and file_paths are only valid for diff")
+    if action == "diff" and mode not in {"unstaged", "staged", "both"}:
+        raise ValueError("mode must be unstaged, staged, or both")
     if action == "diff" and any(
         arg.startswith("-") and arg not in ("--cached", "--stat", "--name-only", "--")
         for arg in args
@@ -270,8 +277,20 @@ def git_manage(
             )
         if len(positional) > 2:
             raise ValueError("push accepts at most a remote and optional refspec")
+    if action == "pull":
+        if len(args) > 2 or any(arg.startswith("-") for arg in args):
+            raise ValueError("pull accepts at most a remote and branch, with no options")
+    if action in ("merge", "rebase"):
+        if not args or any(arg.startswith("-") for arg in args):
+            raise ValueError(f"{action} requires one or more refs and accepts no options")
     if action == "checkout" and (len(args) != 1 or args[0].startswith("-")):
         raise ValueError("checkout requires exactly one branch or ref")
+    if action == "branch" and (len(args) > 1 or (args and args[0].startswith("-") and args[0] != "--list")):
+        raise ValueError("branch accepts no args, --list, or one new branch name")
+    if action == "stash" and (not args or args[0] not in {"list", "push", "pop", "apply", "drop"}):
+        raise ValueError("stash requires list, push, pop, apply, or drop")
+    if action == "blame" and len(args) != 1:
+        raise ValueError("blame requires exactly one workspace-relative file path")
     for arg in args:
         if arg.startswith(("../", "/", "~/")) or "/../" in arg or arg == "..":
             try:
@@ -408,7 +427,79 @@ def git_manage(
                 }
         # '--' forces git to treat the argument as a ref, never as a file path.
         return _route_failure_to_stderr(run_process([git, "checkout", ref, "--"], cwd=selected_path))
-    return _route_failure_to_stderr(run_process([git, action, *args], cwd=selected_path))
+    if action in ("pull", "merge", "rebase"):
+        state = run_process([git, "status", "--porcelain", "--untracked-files=all"], cwd=selected_path)
+        if state["exit_code"] != 0:
+            return _route_failure_to_stderr(state)
+        if state.get("stdout", "").strip():
+            return {
+                "supported": True,
+                "error_code": "dirty_worktree",
+                "message": f"Cannot {action}: the worktree has staged, unstaged, or untracked changes.",
+                "stdout": "",
+                "stderr": "Worktree must be clean before this action.",
+                "exit_code": 1,
+            }
+    # Resolve file operands explicitly from the selected repository. This avoids
+    # Git's cwd-dependent interpretation changing when repo_path is supplied.
+    git_args = list(args)
+    if action == "diff":
+        git_args = [arg for arg in git_args if arg != "--cached"]
+        if mode == "staged": git_args.insert(0, "--cached")
+        elif mode == "both":
+            # Both passes are combined below so staged and unstaged raw text is preserved.
+            pass
+        if file_paths:
+            separator = git_args.index("--") if "--" in git_args else len(git_args)
+            git_args = git_args[:separator] + ["--", *(git_args[separator + 1:] if separator < len(git_args) else []), *file_paths]
+    path_indexes = []
+    if action == "add":
+        path_indexes = list(range(len(git_args)))
+    elif action == "diff" and "--" in git_args:
+        separator = git_args.index("--")
+        path_indexes = list(range(separator + 1, len(git_args)))
+    elif action == "blame":
+        path_indexes = [0]
+    for index in path_indexes:
+        raw = Path(git_args[index]).expanduser()
+        resolved = (raw if raw.is_absolute() else selected_path / raw).resolve()
+        try:
+            resolved.relative_to(selected_path.resolve())
+        except ValueError:
+            raise ValueError(
+                f"Git path is outside selected repository: expected within '{selected_path}', resolved '{resolved}'."
+            )
+        if not resolved.exists() and not (action == "diff" and resolved.parent.exists()):
+            raise ValueError(
+                f"Git path does not exist: expected within '{selected_path}', resolved '{resolved}'."
+            )
+        git_args[index] = str(resolved)
+    if action == "diff":
+        if mode == "both":
+            staged = run_process([git, "diff", "--cached", *[arg for arg in git_args if arg != "--cached"]], cwd=selected_path)
+            unstaged = run_process([git, "diff", *[arg for arg in git_args if arg != "--cached"]], cwd=selected_path)
+            result = {"stdout": staged.get("stdout", "") + unstaged.get("stdout", ""), "stderr": staged.get("stderr", "") + unstaged.get("stderr", ""), "exit_code": staged.get("exit_code", 1) or unstaged.get("exit_code", 1), "staged_diff": staged.get("stdout", ""), "unstaged_diff": unstaged.get("stdout", "")}
+        else:
+            result = run_process([git, action, *git_args], cwd=selected_path)
+        result = _route_failure_to_stderr(result)
+        result["mode"] = mode
+        result["raw_diff"] = result.get("stdout", "")
+        return result
+    result = _route_failure_to_stderr(run_process([git, action, *git_args], cwd=selected_path))
+    if action == "status" and result.get("exit_code") == 0:
+        porcelain = run_process([git, "status", "--porcelain=v1", "--untracked-files=all"], cwd=selected_path)
+        entries = []
+        for line in porcelain.get("stdout", "").splitlines():
+            if len(line) >= 4:
+                entries.append({"index": line[0], "worktree": line[1], "path": line[3:], "untracked": line[:2] == "??"})
+        result["working_tree"] = [item for item in entries if item["worktree"] != " " or item["untracked"]]
+        result["staged"] = [item for item in entries if item["index"] != " "]
+        result["untracked_files"] = [item["path"] for item in entries if item["untracked"]]
+        result["untracked_summary"] = {"count": len(result["untracked_files"]), "files": result["untracked_files"]}
+    elif action == "log" and result.get("exit_code") == 0:
+        history = run_process([git, "log", "-n", "20", "--format=%H%x09%h%x09%an%x09%aI%x09%s"], cwd=selected_path)
+        result["recent_commits"] = [dict(zip(("hash", "short_hash", "author", "date", "subject"), line.split("\t", 4))) for line in history.get("stdout", "").splitlines()]
+    return result
 
 
 def register(mcp):

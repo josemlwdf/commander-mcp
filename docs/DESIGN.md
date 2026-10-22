@@ -53,7 +53,7 @@ The Python modules for these Tier 1 tools are in `lib/core`; optional Tier 2 too
 
 ### 4. `search_text_regex`
 
-* **MCP Tool Name:** `code_search_ripgrep`
+* **MCP Tool Name:** `search_text`
 * **Input Schema:** `{ query: string, is_regex?: boolean, path_glob?: string, max_results?: number }`
 * **Implementation:** Execute `rg` (Ripgrep) as a binary subprocess in JSON mode (`--json`) to parse line numbers, matches, and path metadata fast.
 
@@ -87,19 +87,7 @@ The Python modules for these Tier 1 tools are in `lib/core`; optional Tier 2 too
 
 *These tools reduce hallucinations and give the agent context across external tools, codebases, and docs.*
 
-The Python server registers the six local/configurable tools in this tier. They do not require external services at startup; each reports when its optional backend is not configured. `mcp_gateway_integration` is intentionally excluded. See the README for configuration and security boundaries.
-
-### 9. `get_symbol_definitions` (LSP)
-
-* **MCP Tool Name:** `lsp_symbol_lookup`
-* **Input Schema:** `{ symbol_name: string, path: string, position: { line: number, character: number } }`
-* **Implementation:** Queries connected Language Server Protocol endpoints for "Go to Definition" or "Find References".
-
-### 10. `semantic_code_search`
-
-* **MCP Tool Name:** `vector_search_codebase`
-* **Input Schema:** `{ natural_language_query: string, top_k?: number }`
-* **Implementation:** Integrates with local vector indexes (e.g., LanceDB / ChromaDB) or embed models to perform conceptual lookups (e.g., "Where is session management initialized?").
+The Python server registers local/configurable tools without requiring external services at startup. `mcp_gateway_integration` is intentionally excluded. See the README for configuration and security boundaries.
 
 ### 11. `lint_and_format`
 
@@ -107,29 +95,17 @@ The Python server registers the six local/configurable tools in this tier. They 
 * **Input Schema:** `{ paths: string[], fix?: boolean }`
 * **Implementation:** Runs Prettier, ESLint, Ruff, or Black via shell call and returns lint errors or formatted diffs.
 
-### 12. `web_search_and_fetch`
+### 10. `web_fetch_docs`
 
 * **MCP Tool Name:** `web_fetch_docs`
-* **Input Schema:** `{ url?: string, search_query?: string }`
-* **Implementation:** Connect to search APIs (Exa, Brave) or convert raw HTML docs into stripped Markdown using readability parsers.
+* **Input Schema:** `{ url: string, offset?: number }`
+* **Implementation:** Fetch public HTTP(S) URLs and convert HTML into readable text.
 
 ### 13. `mcp_gateway_integration`
 
 * **MCP Tool Name:** `mcp_external_call`
 * **Input Schema:** `{ target_service: "github" | "jira" | "postgres", action: string, payload: object }`
 * **Implementation:** Acts as a bridge to delegate specific external tasks (like checking GitHub PRs or executing DB schema migrations) to specialized secondary MCP servers.
-
-### 14. `run_debugger`
-
-* **MCP Tool Name:** `debug_session_step`
-* **Input Schema:** `{ action: "start" | "step_over" | "step_into" | "inspect_vars", breakpoint_file?: string, line?: number }`
-* **Implementation:** Connects to VS Code's DAP (Debug Adapter Protocol) or standalone runtime debuggers (like `pdb` or `node --inspect`).
-
-### 15. `browser_automation`
-
-* **MCP Tool Name:** `browser_action`
-* **Input Schema:** `{ action: "navigate" | "click" | "screenshot" | "get_html", url?: string, selector?: string }`
-* **Implementation:** Leverages Playwright or Puppeteer headless instances to render UI, capture screenshots, and inspect DOM states.
 
 ---
 

@@ -13,7 +13,7 @@ from collections import deque
 from typing import Annotated, Literal
 
 from pydantic import Field
-from ..support import inside, describe
+from ..support import inside, describe, setup_required
 
 
 _LOCK = threading.Lock()
@@ -315,14 +315,15 @@ def register(mcp):
     ) -> dict:
         endpoint = _configured_endpoint()
         if endpoint is None:
-            return {
-                "supported": False,
-                "error_code": "not_configured",
-                "env_var": "HANDY_CODER_DAP_PORT",
-                "message": "Set HANDY_CODER_DAP_PORT and configure a local DAP adapter to enable debugging.",
-                "hint": "Also set HANDY_CODER_DAP_START_REQUEST to JSON with command=launch|attach and arguments.",
-                "next_step": "See docs/SETUP.md#dap-debug_session_step for setup instructions.",
-            }
+            response = setup_required(
+                missing_requirements=["env:HANDY_CODER_DAP_PORT", "env:HANDY_CODER_DAP_START_REQUEST", "dap-adapter"],
+                remediation_commands=["Set HANDY_CODER_DAP_PORT and HANDY_CODER_DAP_START_REQUEST for your adapter."],
+                documentation_url="docs/SETUP.md#dap-debug_session_step",
+                message="Configure a local DAP adapter to enable debugging.", error_code="not_configured",
+            )
+            response["env_var"] = "HANDY_CODER_DAP_PORT"
+            response["hint"] = "HANDY_CODER_DAP_START_REQUEST must be JSON with command=launch|attach and arguments."
+            return response
         # Validate cross-field constraint only after confirming the tool is configured.
         if line is not None and breakpoint_file is None:
             raise ValueError("breakpoint_file is required when line is provided")

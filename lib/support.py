@@ -23,6 +23,19 @@ WORKER_DEADLINE_SECONDS = 30.0
 HANDY_CODER_STATE_DIRNAME = ".handy_coder"
 
 
+def setup_required(*, missing_requirements: list[str], remediation_commands: list[str], documentation_url: str, message: str, error_code: str = "setup_required") -> dict:
+    """Return the shared, machine-readable response for an unavailable optional tool."""
+    return {
+        "supported": False,
+        "status": "setup_required",
+        "error_code": error_code,
+        "message": message,
+        "missing_requirements": missing_requirements,
+        "remediation_commands": remediation_commands,
+        "documentation_url": documentation_url,
+    }
+
+
 def ensure_handy_coder_state_dir(root: Path | None = None) -> Path:
     """Ensure the per-workspace orchestration state directory exists."""
     workspace_root = Path(root or ROOT)
@@ -175,7 +188,8 @@ def _may_match_glob_scope(path_parts: tuple[str, ...], prefix: tuple[str, ...]) 
     return path_parts[:len(prefix)] == prefix
 
 def run_process(command: str | list[str], *, cwd: str | Path = ROOT, timeout_ms: int = DEFAULT_TIMEOUT_MS,
-                shell: bool = False, max_output_bytes: int = MAX_OUTPUT_BYTES) -> dict:
+                shell: bool = False, max_output_bytes: int = MAX_OUTPUT_BYTES,
+                env: dict[str, str] | None = None, stdin: str | None = None, shell_executable: str | None = None) -> dict:
     work = inside(cwd, must_exist=True)
     if not work.is_dir(): raise ValueError(f"Working directory is not a directory: {work}")
     if not 1 <= int(timeout_ms) <= 600_000: raise ValueError("timeout_ms must be between 1 and 600000")
@@ -184,13 +198,15 @@ def run_process(command: str | list[str], *, cwd: str | Path = ROOT, timeout_ms:
     use_shell = shell
     if shell:
         validate_shell_command(command, work)
-        if os.name == "nt": argv = [SHELL, "-Command", command]
-        else: argv = [SHELL, "-c", command]
+        selected_shell = shell_executable or SHELL
+        if os.name == "nt": argv = [selected_shell, "-Command", command]
+        else: argv = [selected_shell, "-c", command]
         use_shell = False
     captured={"stdout":bytearray(),"stderr":bytearray()}; truncated={"stdout":False,"stderr":False}
     try:
         p=subprocess.Popen(argv,cwd=work,shell=use_shell,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-                           env={**os.environ,"CI":"true","DEBIAN_FRONTEND":"noninteractive"},
+                           stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                           env={**os.environ,"CI":"true","DEBIAN_FRONTEND":"noninteractive", **(env or {})},
                            start_new_session=(os.name!="nt"))
     except OSError as exc:
         return {"stdout":"","stderr":f"Failed to start process: {exc}","exit_code":1,"timed_out":False,"duration_ms":round((time.monotonic()-start)*1000)}
@@ -203,6 +219,12 @@ def run_process(command: str | list[str], *, cwd: str | Path = ROOT, timeout_ms:
             if len(chunk)>room: truncated[key]=True
     readers=[threading.Thread(target=drain,args=(p.stdout,"stdout"),daemon=True),threading.Thread(target=drain,args=(p.stderr,"stderr"),daemon=True)]
     for t in readers:t.start()
+    if stdin is not None:
+        try:
+            p.stdin.write(stdin.encode("utf-8"))
+            p.stdin.close()
+        except BrokenPipeError:
+            pass
     timed_out=False
     try: code=p.wait(timeout=timeout_ms/1000)
     except subprocess.TimeoutExpired:

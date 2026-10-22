@@ -52,7 +52,7 @@ class CoreFeedbackTests(unittest.TestCase):
 
         with patch("lib.support.os.scandir", side_effect=fail_broken):
             files = self.mcp.tools["find_files"]("*.py")
-            matches = self.mcp.tools["code_search_ripgrep"]("needle")
+            matches = self.mcp.tools["search_text"]("needle")
 
         self.assertEqual(files["files"], ["good.py"])
         self.assertEqual([error["path"] for error in files["errors"]], ["broken"])
@@ -75,7 +75,7 @@ class CoreFeedbackTests(unittest.TestCase):
             return original_scandir(path)
 
         with patch("lib.support.os.scandir", side_effect=record_scandir):
-            result = self.mcp.tools["code_search_ripgrep"](
+            result = self.mcp.tools["search_text"](
                 "needle", path_glob="src/**/*.py"
             )
 
@@ -371,19 +371,11 @@ class CoreFeedbackTests(unittest.TestCase):
         self.assertNotIn("applied_start", entry)
 
     def test_code_search_returns_error_code_for_invalid_regex(self):
-        result = self.mcp.tools["code_search_ripgrep"]("(unclosed", is_regex=True)
+        result = self.mcp.tools["search_text"]("(unclosed", is_regex=True)
 
         self.assertEqual(result.get("error_code"), "invalid_regex")
         self.assertIn("matches", result)
         self.assertEqual(result["matches"], [])
-
-    def test_search_text_and_code_search_alias_match(self):
-        (self.root / "src.py").write_text("needle\n", encoding="utf-8")
-
-        primary = self.mcp.tools["search_text"]("needle")
-        alias = self.mcp.tools["code_search_ripgrep"]("needle")
-
-        self.assertEqual(primary, alias)
 
     def test_find_files_excludes_generated_dirs_by_default(self):
         (self.root / "__pycache__").mkdir()
@@ -476,6 +468,34 @@ class CoreFeedbackTests(unittest.TestCase):
         """Output with no recognisable summary line must return None."""
         self.assertIsNone(run_tests._parse_pytest_output("collected 0 items"))
 
+    def test_js_test_parser_counts_and_failure_details(self):
+        output = "Tests: 1 failed, 2 passed, 1 skipped, 4 total\n  ✕ suite › rejects input\n"
+        parsed = run_tests._parse_js_test_output(output)
+        self.assertEqual((parsed["passed"], parsed["failed"], parsed["skipped"]), (2, 1, 1))
+        self.assertEqual(parsed["failures"][0]["test_id"], "suite › rejects input")
+        vitest = run_tests._parse_js_test_output("❯ 1 failed | 2 passed | 1 skipped (4)\n❯ src/a.test.js (1)\n")
+        self.assertEqual((vitest["passed"], vitest["failed"], vitest["skipped"]), (2, 1, 1))
+        self.assertIsNone(run_tests._parse_js_test_output("runner crashed"))
+
+    def test_create_file_octal_permission_strings(self):
+        from lib.core import create_file
+        self.assertEqual(create_file.create_file("mode.txt", permissions="0755")["created"], True)
+        self.assertEqual((self.root / "mode.txt").stat().st_mode & 0o777, 0o755)
+        invalid = create_file.create_file("bad-mode.txt", permissions="0899")
+        self.assertEqual(invalid["error_code"], "invalid_permissions")
+
+    def test_git_transition_actions_schema_and_clean_guard(self):
+        hints = get_type_hints(git_manage.git_manage, include_extras=True)
+        self.assertIn("pull", str(hints["action"]))
+        self.assertIn("merge", str(hints["action"]))
+        self.assertIn("rebase", str(hints["action"]))
+        dirty = {"exit_code": 0, "stdout": "?? untracked\n", "stderr": ""}
+        with patch("lib.core.git_manage.shutil.which", return_value="/usr/bin/git"), \
+             patch("lib.core.git_manage.run_process", side_effect=[{"exit_code": 0, "stdout": "true\n", "stderr": ""}, dirty]) as run:
+            result = git_manage.git_manage("pull")
+        self.assertEqual(result["error_code"], "dirty_worktree")
+        self.assertEqual(run.call_count, 2)
+
     def test_git_manage_rediscovers_newly_created_repo(self):
         """A repo created after the first git_manage call must be accepted."""
         # First call populates the cache with an empty repo list.
@@ -553,7 +573,7 @@ class CoreFeedbackTests(unittest.TestCase):
         for i in range(5):
             (self.root / f"f{i}.txt").write_text("needle\n", encoding="utf-8")
 
-        result = self.mcp.tools["code_search_ripgrep"]("needle", max_results=3)
+        result = self.mcp.tools["search_text"]("needle", max_results=3)
 
         self.assertTrue(result["truncated"])
         self.assertEqual(result.get("truncation_reason"), "max_results")
@@ -575,7 +595,7 @@ class CoreFeedbackTests(unittest.TestCase):
             return real_monotonic()
 
         with patch("lib.core.code_search.time.monotonic", side_effect=fake_monotonic):
-            result = self.mcp.tools["code_search_ripgrep"]("needle")
+            result = self.mcp.tools["search_text"]("needle")
 
         self.assertTrue(result["truncated"])
         self.assertEqual(result.get("truncation_reason"), "time_limit")
@@ -763,7 +783,7 @@ class CoreFeedbackTests(unittest.TestCase):
         for i in range(10):
             (self.root / f"f{i}.txt").write_text("needle\n", encoding="utf-8")
 
-        result = self.mcp.tools["code_search_ripgrep"]("needle", max_results=3)
+        result = self.mcp.tools["search_text"]("needle", max_results=3)
 
         self.assertTrue(result["truncated"])
         self.assertEqual(len(result["matches"]), 3)
@@ -774,7 +794,7 @@ class CoreFeedbackTests(unittest.TestCase):
         """Non-truncated results must still include total_matches_seen=len(matches)."""
         (self.root / "one.txt").write_text("needle\n", encoding="utf-8")
 
-        result = self.mcp.tools["code_search_ripgrep"]("needle", max_results=100)
+        result = self.mcp.tools["search_text"]("needle", max_results=100)
 
         self.assertFalse(result["truncated"])
         self.assertEqual(result["total_matches_seen"], len(result["matches"]))

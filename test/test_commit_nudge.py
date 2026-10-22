@@ -51,6 +51,24 @@ class CommitNudgeTests(unittest.TestCase):
         self.assertEqual(result["commit_nudge"]["level"], "soft")
         self.assertGreaterEqual(result["commit_nudge"]["lines"], 80)
 
+    def test_dry_run_does_not_advance_tracking_or_attach_nudge(self):
+        lines = "\n".join(f"line {i}" for i in range(90)) + "\n"
+        (self.root / "a.txt").write_text(lines, encoding="utf-8")
+        args = {"edits": [{"path": "a.txt"}], "dry_run": True}
+        result = commit_nudge.after_tool_call(
+            "apply_edits", args, {"edits": [{"path": "a.txt", "diff": "large"}], "dry_run": True}
+        )
+        self.assertNotIn("commit_nudge", result)
+        self.assertEqual(commit_nudge.STATE.write_calls, 0)
+        self.assertEqual(commit_nudge.STATE.payload_chars, 0)
+
+        written = commit_nudge.after_tool_call(
+            "apply_edits", {"edits": [{"path": "a.txt"}]},
+            {"edits": [{"path": "a.txt", "diff": "large"}], "dry_run": False},
+        )
+        self.assertEqual(commit_nudge.STATE.write_calls, 1)
+        self.assertIn("commit_nudge", written)
+
 
 if __name__ == "__main__":
     unittest.main()

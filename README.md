@@ -1,35 +1,41 @@
-# Handy Coder MCP 🛡️
+# Handy Coder MCP
 
-Handy Coder MCP is a Python Model Context Protocol server for coding agents. It exposes workspace file, shell, search, diagnostics, test, and Git tools. File paths and command working directories are confined to the configured root, and tool descriptions explain the workspace path rules.
+Handy Coder MCP is a local [Model Context Protocol](https://modelcontextprotocol.io/) server that gives coding assistants tools for working in a project: reading and editing files, searching code, running commands and tests, checking Git, and coordinating delegated tasks.
 
-## Requirements and installation
+It runs over standard input/output and uses a configured workspace directory as its file and command boundary. It is written in Python and requires Python 3.11 or newer.
 
-- Python 3.11 or newer
+## Install
 
-Install from a checkout:
+Clone the repository and install it into a virtual environment:
 
-```bash
+```sh
 git clone https://github.com/josemlwdf/handy-coder-mcp.git
 cd handy-coder-mcp
 python -m venv .venv
 .venv/bin/python -m pip install .
 ```
 
-On Windows, use `.venv\Scripts\python.exe` in place of `.venv/bin/python`.
+On Windows, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
 
-Run against the current directory or select a workspace root:
+## Run
 
-```bash
+Start the server for the current directory:
+
+```sh
 .venv/bin/handy-coder-mcp
-.venv/bin/handy-coder-mcp --root /home/user/my-app
-.venv/bin/handy-coder-mcp --root /home/user/my-app --shell /bin/bash
 ```
 
-`HANDY_CODER_ROOT` can provide the root when `--root` is omitted. `--shell` retains the shell override behavior. The server uses the configured root as its working directory and reports the authorized root in every tool description. Only the command-execution tool reports the working directory.
+Or choose a workspace explicitly:
 
-## MCP client configuration
+```sh
+.venv/bin/handy-coder-mcp --root /path/to/project
+```
 
-For VS Code, configure the server in the workspace's `.vscode/mcp.json`. Set both `cwd` and `--root` to `${workspaceFolder}` so the server uses the open project rather than the directory where the VS Code process was started:
+`--root` sets the workspace used by file tools and as the default command directory. `HANDY_CODER_ROOT` can set the same value when `--root` is omitted. `--shell` optionally selects the shell used by command execution.
+
+## Connect an MCP client
+
+Configure your client to launch the installed command and set its working directory to the project. For example, a VS Code `.vscode/mcp.json` entry:
 
 ```json
 {
@@ -44,166 +50,30 @@ For VS Code, configure the server in the workspace's `.vscode/mcp.json`. Set bot
 }
 ```
 
-Replace the command with the installed entry point's path on your system. This configuration sets the authorized root and command working directory to the same open workspace. Use workspace-relative paths with path-taking tools; they resolve from the configured root. The `terminal_exec` description also reports its working directory.
+Replace the command path with the installed executable on your machine. Other stdio MCP clients use the same command and argument pattern in their own configuration format.
 
-For Kiro, Cursor, Claude Desktop, and other stdio MCP clients, point the server at the installed Python module or checkout:
+## What it provides
 
-```json
-{
-  "mcpServers": {
-    "handy-coder-mcp": {
-      "command": "/path/to/handy-coder-mcp/.venv/bin/python",
-      "args": [
-        "/path/to/handy-coder-mcp/handy_coder_mcp.py"
-      ]
-    }
-  }
-}
-```
+The server includes tools for workspace file operations, code search, terminal commands, diagnostics, test execution, Git actions, skills, orchestration, and subagents. Optional tools can format or lint code when supported binaries are installed, and fetch text from public web pages.
 
-The configured Python executable must be the same one used to install the project dependencies. On Windows, use `/path/to/handy-coder-mcp/.venv/Scripts/python.exe` as the command.
+The available tools and optional dependencies vary by environment. Use `get_capabilities` from your MCP client to see what is available. The full [tool inventory](docs/TOOL_INVENTORY.md) lists registered tools; [optional setup notes](docs/SETUP.md) cover configuration and troubleshooting.
 
-Alternatively, use the installed entry point:
+## Security and workspace scope
 
-```json
-{
-  "mcpServers": {
-    "handy-coder-mcp": {
-      "command": "/path/to/handy-coder-mcp/.venv/bin/handy-coder-mcp"
-    }
-  }
-}
-```
+File operations and command working directories are scoped to the configured workspace. The command tool uses heuristic checks to block common path escapes; this is not operating-system isolation. Only connect the server to workspaces and commands you trust.
 
-The server registers `read_files`, `create_file`, `apply_edits`, `terminal_exec`, `search_text`, `code_search_ripgrep` (deprecated alias), `find_files`, `code_get_diagnostics`, `run_tests`, `git_manage`, `defer_commit`, `get_capabilities`, `skills_manage`, `orchestrator_bootstrap`, `orchestrator_update_task_status`, `lsp_symbol_lookup`, `vector_search_codebase`, `code_format_lint`, `web_fetch_docs`, `debug_session_step`, `browser_action`, `subagent_run`, `subagent_status`, `subagent_result`, `subagent_complete`, and `subagent_cancel`.
+## Troubleshooting
 
-Tool modules are organized by tier: Tier 1 tools live in `lib/core`, and optional Tier 2 tools live in `lib/extras`.
+If the client cannot connect or times out, confirm it launches the same Python environment where the package was installed and that its workspace path is valid. The repository includes a local stdio smoke check:
 
-For optional-feature setup (LSP, DAP, browser automation, semantic search, and external search), see [SETUP.md](docs/SETUP.md). For the canonical registered-tool list, see [docs/TOOL_INVENTORY.md](docs/TOOL_INVENTORY.md).
-
-
-### Check a stdio connection
-
-If an MCP client reports request timeouts for every tool, first check that the configured command can start, complete the MCP handshake, list its tools, and answer a harmless read request. From this checkout, run:
-
-```bash
+```sh
 .venv/bin/python scripts/mcp_smoke_check.py --root "$PWD" --cwd "$PWD"
 ```
 
-To check the exact installed command and workspace used by a client, pass them explicitly:
+## Development
 
-```bash
-.venv/bin/python scripts/mcp_smoke_check.py \
-  --command /path/to/handy-coder-mcp/.venv/bin/handy-coder-mcp \
-  --root /path/to/workspace \
-  --cwd /path/to/workspace
+Run the test suite from the repository root:
+
+```sh
+.venv/bin/python -m pytest
 ```
-
-The check initializes the server, lists registered tool names, and calls `read_files` on `README.md`. A successful check means the configured server and stdio transport responded locally; if the client still times out, compare its launch command, arguments, working directory, and Python environment with this invocation, then inspect the client’s server stderr log. The MCP server registers names such as `read_files`; clients may display them with an additional server-name prefix.
-
-### Workspace paths and tool errors
-
-Use workspace-relative paths, which resolve from the configured `--root`. Path operations are strictly validated against that root before any filesystem access occurs. Read and edit responses retain their existing `path` field and include `resolved_path`. `read_files` returns `total_lines`, `applied_start`, and `applied_end` alongside the content.
-
-`apply_edits` validates and stages the entire batch of edits in memory before writing any changes to disk. If any edit in the batch contains an invalid regular expression, fails to match, or encounters a filesystem write failure, all changes are rolled back so no partial edits remain applied. Prefer `pattern`/`replacement` parameter names; `old_str`/`new_str` remain supported as legacy aliases. Matching always uses Python regex (`re` module). Replacement text is literal by default (escape sequences and backreferences are not interpreted unless `expand_groups=true`).
-
-If your client also exposes a separate `multi_edit` helper, use this quick guide:
-
-| Tool | Match mode | Replacement mode | Best for |
-|---|---|---|---|
-| `multi_edit` (client helper) | Literal substring | Literal substring | Simple exact-text swaps |
-| `apply_edits` (this server) | Python `re` regex | Literal by default; regex-template when `expand_groups=true` | Structured/targeted edits with validation and match counts |
-
-`apply_edits` contract highlights:
-
-- Entire edit batches are validated and staged before write; failures leave files unchanged.
-- Edits are processed in input order against staged content; repeated or overlapping edits on the same file are order-sensitive.
-- `replace_all=false` replaces the first match per edit; `replace_all=true` replaces all matches.
-- `replacement`/`new_str` is literal unless `expand_groups=true`, where `\\1` and `\\g<name>` are expanded.
-- Errors are structured (`error_code`, `edit_index`, message) and include a unified diff for successful staged edits.
-
-`apply_edits` failure-mode matrix:
-
-| Scenario | Typical `error_code` | Outcome |
-|---|---|---|
-| Missing target file | `not_found` | Batch stops at that edit index; no files are written. |
-| Path escapes workspace root | `path_escape` | Batch stops; no files are written. |
-| Target is not a UTF-8 text file | `binary_file` | Batch stops; no files are written. |
-| Duplicate/overlapping edits where a later pattern no longer matches staged text | `no_match` | Batch stops at the failing edit; earlier staged changes are discarded (atomic rollback). |
-| Invalid regex in `pattern`/`old_str` | `invalid_regex` | Batch stops; no files are written. |
-| Invalid group reference/template with `expand_groups=true` | `invalid_replacement` | Batch stops; no files are written. |
-| Invalid edit shape (missing/contradictory aliases) | `invalid_edit` | Batch stops; no files are written. |
-| Filesystem access/write failure | `io_error` (staging) or raised write failure with rollback | Any writes already performed are reverted to original content. |
-
-`find_files` and `code_search_ripgrep` (deprecated; prefer `search_text`) return successful partial results when a workspace directory cannot be scanned. Their `errors` arrays identify skipped workspace-relative paths and explain the filesystem error. `find_files` and repository discovery enforce time limits (15 seconds) and entry limits (5,000 directories/results), excluding common generated directories by default (`node_modules`, `__pycache__`, `.venv`, `dist`, `build`, etc.), and set `incomplete: true` if limits are hit. `code_search_ripgrep` returns a structured `{"error_code": "invalid_regex", ...}` if given an invalid regular expression, and supports optional `context_lines` returning `context_before` and `context_after`.
-
-Unfiltered `run_tests` runs require a recognized test setup (for example, pytest configuration or actual test files); a generic `pyproject.toml` alone is not enough. Supplying both a framework and `filter_path` allows a targeted run without workspace-wide test discovery. `run_tests` parses test outcomes (e.g. `passed`, `failed`, `errors`, `skipped`) into a structured `parsed` metadata dictionary, and for pytest may include `hints`/`preflight_notes` for common import-path issues. If tests import local modules (for example `from lib import support`), adding `test/__init__.py` is recommended for reliable collection across environments.
-
-`code_get_diagnostics` executes recipes and includes the process `exit_code` in its response. `code_format_lint` discloses which formatters and linters were run in `tools_run` and which were missing in `tools_skipped`. `web_fetch_docs` includes `http_status`, `final_url`, and a `truncated` boolean indicator in its response.
-
-`git_manage` discovers Git repositories when first called, so connecting the MCP server does not require scanning the configured workspace. If the configured workspace root is a repository, it reports that root without searching for nested repositories; otherwise it searches descendant directories without following symlinks or entering `.git` metadata. When several repositories are found, pass the listed workspace-relative path as `repo_path` on every action. With one repository, `repo_path` is optional. If none is found, the tool description instructs the agent to warn the user and ask before initializing; `action: "init"` initializes the configured workspace root only when no repository is found, then dynamically updates the tool description advertised to the MCP client. `git_manage` reports `git_unavailable`, `not_a_git_repository`, `git_repository_check_failed`, or `repository_discovery_incomplete` in `error_code` for those failure cases.
-
-### Skills
-
-`skills_manage` stores and retrieves reusable skills, which are Markdown files with a small frontmatter block (`name`, `description`, `invokable`) in the project's `skills` directory. Set `HANDY_CODER_SKILLS_DIR` to use a different directory. The directory is not tied to `--root`.
-
-- `action: "list"` returns every skill's `name`, `description` and `invokable` flag, plus an `errors` array for files that could not be read.
-- `action: "get"` with `name` returns the full `content` and the `body` without frontmatter.
-- `action: "save"` with `name`, `description` and `content` creates a skill. The frontmatter is generated, so `content` must be the body only. It fails with `already_exists` unless `overwrite: true` is passed. Pass `invokable: false` for skills that should not be invoked directly.
-
-Names must be 1-64 characters of lowercase letters, digits and hyphens, which also prevents path traversal. Failures return an `error_code`: `missing_argument`, `invalid_name`, `invalid_description`, `content_has_frontmatter`, `skill_too_large`, `not_found`, `already_exists`, `binary_file` or `io_error`.
-
-### Subagents
-
-Subagent tools provide a stable five-tool contract for delegated work without requiring any new credentials:
-
-- `subagent_run`: starts a task with a role (`generalist`, `coder`, `explorer`, `reviewer`, or `planner`) and returns one of three statuses: `completed`, `running`, or `delegated_to_host`.
-- `subagent_status`: checks the current task state and usage.
-- `subagent_result`: fetches the full or paged result text.
-- `subagent_complete`: closes a cooperative delegated frame.
-- `subagent_cancel`: cancels a task.
-
-Role tool access is scoped: `generalist`/`explorer` stay read-only, `reviewer` adds diagnostics/test execution, and `planner`/`coder` can also use `create_file` + `apply_edits` when the task requires writing files.
-
-Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, local Ollama when `SUBAGENT_LOCAL=1`, then `cooperative`.
-
-Loop-capable backends (`sampling`, `direct:*`, `local:ollama`) run an internal JSON-action loop and can return `completed` directly from `subagent_run` when `wait: true` and the run finishes quickly; otherwise they return `running` and should be polled with `subagent_status`.
-
-Optional overrides:
-
-- `SUBAGENT_BACKEND=cooperative|sampling|direct|local` chooses the backend family.
-- `SUBAGENT_WAIT_SECONDS` controls the synchronous wait budget for `subagent_run` (default 15).
-- `SUBAGENT_MODEL_OPENAI`, `SUBAGENT_MODEL_ANTHROPIC`, `SUBAGENT_MODEL_LOCAL` override default model ids per backend.
-- `SUBAGENT_SAMPLING_URL` (plus optional `SUBAGENT_SAMPLING_MODEL` and `SUBAGENT_SAMPLING_API_KEY`) enables HTTP sampling in runtimes without a native sampling bridge.
-
-Use subagents for broad searches, independent reviews, and large-input summaries; avoid delegation only for single quick lookups. In practice, prefer an orchestrator-first style: keep parent context minimal and delegate most non-trivial work to subagents.
-
-### Orchestrator bootstrap
-
-`orchestrator_bootstrap` creates `.handy_coder/implementation-plan.md` and `.handy_coder/tasks.md` from a single high-level request. The generated tasks file uses `[ ]` placeholders with explicit status labels (`non_started`, `interrupted`, `complete`, `failed`) so an orchestrator can track progress while repeatedly spawning subagents.
-
-`orchestrator_update_task_status` atomically updates a single `[status: ...]` task line (selected by `line_number` or `task_contains`) without rewriting progress manually.
-
-### Optional Tier 2 integrations
-
-Tier 2 tools are registered without requiring external services. Tools report a clear unsupported/configuration message when their optional backend is unavailable.
-
-- `lsp_symbol_lookup`: set `HANDY_CODER_LSP_COMMAND` to a local language-server executable and arguments, such as `pylsp`. The command is launched without a shell.
-- `vector_search_codebase`: install `sentence-transformers` separately and set `HANDY_CODER_EMBEDDING_MODEL` to a model already present on disk. Model downloads are disabled.
-- `code_format_lint`: uses installed Ruff or Black for Python and installed ESLint and/or Prettier for JavaScript/TypeScript. Project `node_modules/.bin` tools are recognized. Set `fix: true` to write formatting/fix changes.
-- `web_fetch_docs`: direct public HTTP(S) fetching is available without credentials. Requests to private, local, or reserved addresses are blocked. Web search requires `HANDY_CODER_SEARCH_URL`, a trusted JSON endpoint accepting a `q` query parameter and returning `{"results":[{"title":"...","url":"...","snippet":"..."}]}`.
-- `debug_session_step`: connects only to a local DAP adapter. Set `HANDY_CODER_DAP_PORT`, optionally `HANDY_CODER_DAP_HOST` (default `127.0.0.1`), `HANDY_CODER_DAP_ADAPTER_ID`, and `HANDY_CODER_DAP_START_REQUEST` to a JSON object with a `command` (`launch` or `attach`) and an `arguments` object. Use `action: "stop"` to close a session.
-- `browser_action`: requires the optional Playwright Python package and an installed Chromium browser. HTTP(S) pages are supported; localhost is permitted for local development, and private/reserved network requests are blocked.
-
-This server does not include the Tier 2 external MCP gateway tool.
-
-## Security and limits
-
-- `--root` is the authorization boundary. Use workspace-relative file paths, which resolve from it. Read and edit responses include a `resolved_path`. Paths are validated lexically before any filesystem access: paths that reference parent directories (`../`), absolute paths, or home-directory expansions that would escape the authorized root are rejected immediately.
-- Shell execution in `terminal_exec` applies a heuristic lexical guard that rejects recognizable path escapes, home-directory references (`~`), common `$HOME`/`$PWD`-style escapes, and redirection targets that look like they escape the workspace root. This guard catches common patterns but is not a complete sandbox. Treat `terminal_exec` as trusted-input-only and use operating-system isolation if untrusted command input is possible.
-- File reads are capped at 2 MiB per file. Process output is capped at 1 MiB per stream.
-- **Worker deadline:** All tool calls (except `debug_session_step`) execute in an isolated worker subprocess. The default server-side deadline is **30 seconds**. `terminal_exec` may extend its own worker deadline by passing `timeout_ms`; the maximum accepted is 600,000 ms (10 minutes), adding a 5-second grace period over the subprocess deadline. Timed-out workers have their entire process group killed. `debug_session_step` runs in a long-lived supervised subprocess that preserves DAP session state across calls, with a 30-second deadline per action.
-- `find_files` and repository discovery impose a 15-second scan time limit and a 5,000-entry ceiling; results are marked `incomplete: true` if either limit is reached.
-- Use relative paths inside the workspace. Commands such as `npm test`, `git status`, `ls`, and `python scripts/build.py` run with the workspace as their default directory.
-
-`terminal_exec` and `git_manage` can modify the workspace. Review changes with `git_manage` actions `status` and `diff` before committing. `git_manage` can also push to a configured remote when using the `push` action.

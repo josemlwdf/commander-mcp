@@ -36,10 +36,10 @@ def _load_fastmcp():
 from lib import support, worker_supervisor
 from lib.core import (
     read_files, create_file, apply_edits, terminal_exec, code_search, find_files,
-    diagnostics, run_tests, git_manage, commit_nudge, system_info, skills, orchestrator_bootstrap, orchestrator_tasks,
+    diagnostics, run_tests, git_manage, build_project, commit_nudge, system_info, skills, orchestrator_bootstrap, orchestrator_tasks,
 )
 from lib.extras import (
-    lsp_lookup, semantic_search, code_format_lint, web_fetch, debugger, browser,
+    code_format_lint, web_fetch,
 )
 from lib.subagents import tools as subagent_tools
 
@@ -64,8 +64,8 @@ def main() -> None:
     mcp = FastMCP("handy-coder-mcp")
     for module in (
         read_files, create_file, apply_edits, terminal_exec, code_search, find_files,
-        diagnostics, run_tests, git_manage, commit_nudge, lsp_lookup, semantic_search,
-        code_format_lint, web_fetch, debugger, browser, system_info, skills, orchestrator_bootstrap, orchestrator_tasks, subagent_tools,
+        diagnostics, run_tests, git_manage, build_project, commit_nudge,
+        code_format_lint, web_fetch, system_info, skills, orchestrator_bootstrap, orchestrator_tasks, subagent_tools,
     ):
         module.register(mcp)
 

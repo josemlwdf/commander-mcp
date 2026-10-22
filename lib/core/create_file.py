@@ -1,4 +1,5 @@
 from typing import Annotated
+import os
 
 from pydantic import Field
 
@@ -27,7 +28,20 @@ def create_file(
         bool,
         Field(description="If true (default), create any missing parent directories inside the workspace."),
     ] = True,
+    permissions: Annotated[int | str | None, Field(description="Optional POSIX mode as a decimal integer (0 to 511, e.g. 420) or octal string ('0755' or '0o755'). Ignored on Windows.")] = None,
+    backup: Annotated[bool, Field(description="When overwriting, save the prior bytes to a sibling .bak file before writing.")] = False,
 ) -> dict:
+    if isinstance(permissions, str):
+        try:
+            if not (permissions.lower().startswith("0o") or (permissions and all(c in "01234567" for c in permissions))):
+                raise ValueError
+            permissions = int(permissions, 8)
+            if permissions > 0o777:
+                raise ValueError
+        except ValueError:
+            return _error("invalid_permissions", path, "permissions must be a decimal integer from 0 to 511 or an octal string such as '0755' or '0o755'")
+    elif permissions is not None and (permissions < 0 or permissions > 511):
+        return _error("invalid_permissions", path, "decimal permissions must be between 0 and 511")
     try:
         p = inside(path)
     except ValueError:
@@ -50,6 +64,9 @@ def create_file(
         return _error("already_exists", path, f"File already exists (pass overwrite=true to replace it): {path}")
 
     try:
+        if existed and backup:
+            backup_path = inside(str(p) + ".bak")
+            backup_path.write_bytes(p.read_bytes())
         if not p.parent.exists():
             if not create_parents:
                 return _error("parent_missing", path, f"Parent directory does not exist: {path}")
@@ -62,6 +79,8 @@ def create_file(
         # Binary mode keeps newlines exactly as supplied on every platform.
         with open(p, "wb" if overwrite else "xb") as handle:
             handle.write(encoded)
+        if permissions is not None and hasattr(p, "chmod") and os.name != "nt":
+            p.chmod(permissions)
     except ValueError:
         return _error("path_escape", path, f"Path escapes authorized workspace root: {path}")
     except FileExistsError:
@@ -85,6 +104,7 @@ def register(mcp):
         "Create a new UTF-8 text file in the workspace (max 2 MiB), optionally with initial content. "
         "Fails with error_code='already_exists' instead of replacing an existing file unless overwrite=true. "
         "Missing parent directories are created unless create_parents=false. "
+        "Optional permissions sets POSIX mode bits; backup=true saves the prior file as a sibling .bak before overwrite. "
         "Failures return error_code (already_exists, path_escape, not_a_file, not_a_directory, parent_missing, file_too_large, io_error) "
         "with a message instead of raising; nothing is written. "
         "Response includes the workspace-relative path, created, overwritten, bytes and lines. "

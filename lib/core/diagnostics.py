@@ -3,14 +3,17 @@ from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field
-from ..support import inside, run_process, describe
+from ..support import inside, run_process, describe, setup_required
 
 
 def code_get_diagnostics(
     path: Annotated[str | None, Field(description="Optional workspace-relative directory to inspect; defaults to the workspace root.")] = None,
+    check: Annotated[str | None, Field(description="Optional configured check to run, such as ruff, mypy, lint, typecheck, check, or validate.")] = None,
+    timeout_ms: Annotated[int, Field(ge=1, le=600000, description="Diagnostic process timeout in milliseconds; defaults to 30000.")] = 30000,
 ) -> dict:
     base = inside(path or ".", must_exist=True)
     candidates = []
+    detection_trace: list[dict[str, str]] = []
     skipped: list[dict] = []
     config_errors: list[dict] = []
 
@@ -38,6 +41,7 @@ def code_get_diagnostics(
             for key in ("typecheck", "check", "lint"):
                 if key in scripts:
                     candidates.append((key, ["npm", "run", key]))
+                    detection_trace.append({"source": "package.json", "check": key, "status": "configured"})
     py = base / "pyproject.toml"
     if py.is_file():
         try:
@@ -48,8 +52,10 @@ def code_get_diagnostics(
             cfg = data.get("tool", {})
             if "ruff" in cfg:
                 candidates.append(("ruff", ["ruff", "check", "."]))
+                detection_trace.append({"source": "pyproject.toml", "check": "ruff", "status": "configured"})
             if "mypy" in cfg:
                 candidates.append(("mypy", ["mypy", "."]))
+                detection_trace.append({"source": "pyproject.toml", "check": "mypy", "status": "configured"})
     mk = base / "Makefile"
     if mk.is_file():
         targets = set()
@@ -59,6 +65,7 @@ def code_get_diagnostics(
         for t in ("check", "lint", "typecheck", "validate"):
             if t in targets:
                 candidates.append((t, ["make", t]))
+                detection_trace.append({"source": "Makefile", "check": t, "status": "configured"})
     if not candidates and config_errors:
         files = ", ".join(e["file"] for e in config_errors)
         return {
@@ -67,6 +74,7 @@ def code_get_diagnostics(
             "ok": False,
             "message": f"Could not read diagnostics configuration; fix these files and retry: {files}.",
             "config_errors": config_errors,
+            "detection_trace": detection_trace,
         }
     if not candidates:
         return {
@@ -75,37 +83,40 @@ def code_get_diagnostics(
                 f"No supported diagnostics check found in {base} "
                 "(looked for package scripts, Ruff/mypy configuration, and Makefile check/lint/typecheck/validate targets)."
             ),
+            "detection_trace": detection_trace,
         }
+    if check:
+        candidates = [candidate for candidate in candidates if candidate[0] == check]
+        if not candidates:
+            return {"supported": False, "error_code": "check_not_found", "message": f"No configured diagnostic check named {check!r}.", "detection_trace": detection_trace}
     # Try each candidate in order, skipping tools that are not installed.
     for name, cmd in candidates:
-        res = run_process(cmd, cwd=base)
+        res = run_process(cmd, cwd=base, timeout_ms=timeout_ms)
         # Distinguish "tool not installed" from "tool ran and reported findings".
         if res["exit_code"] != 0 and res.get("stderr", "").startswith("Failed to start process:"):
             # Try the next candidate; if this is the last one, return the error.
             if (name, cmd) == candidates[-1]:
                 return {
-                    "supported": True,
-                    "check": name,
-                    "error_code": "tool_not_installed",
-                    "ok": False,
-                    "message": (
-                        f"The '{name}' tool is configured but could not be started. "
-                        "Install it and try again."
+                    **setup_required(
+                        missing_requirements=[f"binary:{name}"],
+                        remediation_commands=[f"Install the configured {name} diagnostic tool."],
+                        documentation_url="docs/SETUP.md#diagnostics",
+                        message=f"The '{name}' tool is configured but could not be started.", error_code="tool_not_installed",
                     ),
-                    **_history(),
-                    **res,
+                    "supported": True, "check": name, "ok": False,
+                    **_history(), **res,
                 }
             skipped.append({"check": name, "error_code": "tool_not_installed"})
             continue
         ok = res["exit_code"] == 0
-        return {"supported": True, "check": name, "ok": ok, **_history(), **res}
+        return {"supported": True, "check": name, "ok": ok, "detection_trace": detection_trace, **_history(), **res}
     # Unreachable but satisfies type checkers.
     return {"supported": False, "message": "No diagnostic tool could be run."}
 
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Detect and run the first available diagnostic tool in the selected workspace directory. "
+        "Detect and run the first available diagnostic tool in the selected workspace directory; path selects directory, check selects a named configured check, timeout_ms bounds execution. "
         "Detection order: package.json scripts (typecheck > check > lint), "
         "pyproject.toml tools (ruff > mypy), then Makefile targets (check > lint > typecheck > validate). "
         "Returns the check name, ok (true when exit_code is 0), exit code, stdout, stderr, and duration. "

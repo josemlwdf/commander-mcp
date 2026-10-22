@@ -142,11 +142,13 @@ class SubagentManager:
             self._stack = [f for f in self._stack if f.task_id != task_id]
             return task
 
-    def cancel_task(self, task_id: str) -> Task:
+    def cancel_task(self, task_id: str, reason: str | None = None) -> Task:
         with self._lock:
             self._sweep_locked()
             task = self._tasks[task_id]
             task.state = "cancelled"
+            if reason:
+                task.error = f"Cancelled: {reason}"
             task.updated_at = time.time()
             self._stack = [f for f in self._stack if f.task_id != task_id]
             return task

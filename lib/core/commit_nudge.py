@@ -425,6 +425,8 @@ def after_tool_call(tool_name: str, args: dict[str, Any], result: Any) -> Any:
             return result
         if isinstance(result, dict) and result.get("error_code"):
             return result
+        if tool_name == "apply_edits" and args.get("dry_run") is True:
+            return result
 
         _ensure_cycle_initialized(STATE)
 
@@ -459,11 +461,20 @@ def after_tool_call(tool_name: str, args: dict[str, Any], result: Any) -> Any:
 
 
 def defer_commit(
-    reason: Annotated[str, Field(min_length=3, description="Why this work cannot be committed yet.")],
-    calls: Annotated[int, Field(ge=1, le=50, description="Number of write calls to snooze commit nudges.")] = 5,
+    action: Annotated[Literal["defer", "cancel", "status"], Field(description="defer starts a deferral, cancel clears it, status reports the current deferral.")] = "defer",
+    reason: Annotated[str | None, Field(description="Why this work cannot be committed yet; required for defer.")] = None,
+    calls: Annotated[int, Field(ge=1, le=50, description="Number of write calls to snooze commit nudges (default 5).")]=5,
 ) -> dict:
     with STATE_LOCK:
         _ensure_cycle_initialized(STATE)
+        if action == "status":
+            return {"ok": True, "deferred_calls": STATE.defer_remaining_calls, "defer_used_in_cycle": STATE.defer_used_in_cycle}
+        if action == "cancel":
+            previous = STATE.defer_remaining_calls
+            STATE.defer_remaining_calls = 0
+            return {"ok": True, "cancelled": previous > 0, "previous_deferred_calls": previous}
+        if not reason or len(reason.strip()) < 3:
+            return {"ok": False, "error_code": "missing_argument", "message": "defer requires a reason of at least 3 characters."}
         if STATE.defer_used_in_cycle:
             return {
                 "ok": False,
@@ -490,7 +501,7 @@ def defer_commit(
 def register(mcp):
     return mcp.tool(description=describe(
         "Temporarily defer commit nudges when work is mid-refactor and cannot be committed yet. "
-        "Provide a short reason and a number of write calls to snooze. "
+        "Actions: defer (default, reason required), cancel, or status. Deferral defaults to 5 write calls. "
         "This can be used once per commit cycle and every deferral is logged."
     ))(defer_commit)
 

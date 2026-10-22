@@ -78,6 +78,8 @@ def _entry(name: str, text: str) -> dict:
         "name": name,
         "description": meta.get("description", ""),
         "invokable": meta.get("invokable", "true").lower() == "true",
+        "tags": [tag.strip() for tag in meta.get("tags", "").split(",") if tag.strip()],
+        "version": meta.get("version", "1"),
     }
 
 
@@ -124,6 +126,8 @@ def _save_skill(
     content: str | None,
     invokable: bool,
     overwrite: bool,
+    tags: list[str] | None = None,
+    version: str = "1",
 ) -> dict:
     problem = _validate_name(name)
     if problem:
@@ -146,7 +150,7 @@ def _save_skill(
 
     document = (
         f"---\nname: {name}\ndescription: {description}\n"
-        f"invokable: {'true' if invokable else 'false'}\n---\n\n{body}\n"
+        f"invokable: {'true' if invokable else 'false'}\nversion: {version}\ntags: {','.join(tags or [])}\n---\n\n{body}\n"
     )
     encoded = document.encode("utf-8")
     if len(encoded) > MAX_SKILL_BYTES:
@@ -185,8 +189,8 @@ def _save_skill(
 
 def skills_manage(
     action: Annotated[
-        Literal["list", "get", "save"],
-        Field(description="list: return all skills with name and description. get: return one skill's full content. save: create or update a skill."),
+        Literal["list", "get", "save", "search", "delete", "export"],
+        Field(description="list: return skills. search: filter by query. get/export: retrieve full skill Markdown. save: create/update with optional tags and version. delete: remove a skill."),
     ],
     name: Annotated[
         str | None,
@@ -208,22 +212,47 @@ def skills_manage(
         bool,
         Field(description="For save: replace an existing skill with the same name. Defaults to false."),
     ] = False,
+    query: Annotated[str | None, Field(description="Search text used by the search action.")] = None,
+    tags: Annotated[list[str] | None, Field(description='Optional array of tag strings stored in skill metadata when saving, for example ["python", "testing"].')] = None,
+    version: Annotated[str, Field(description="Skill metadata version, defaults to 1.")] = "1",
 ) -> dict:
     if action == "list":
         return _list_skills()
     if action == "get":
         return _get_skill(name)
+    if action == "export":
+        return _get_skill(name)
+    if action == "search":
+        needle = (query or "").lower()
+        listed = _list_skills()
+        listed["skills"] = [s for s in listed["skills"] if needle in s["name"].lower() or needle in s["description"].lower() or any(needle in t.lower() for t in s["tags"])]
+        listed["count"] = len(listed["skills"])
+        return listed
+    if action == "delete":
+        problem = _validate_name(name)
+        if problem: return problem
+        try:
+            (_skills_dir() / f"{name}.md").unlink()
+            return {"deleted": True, "name": name}
+        except FileNotFoundError:
+            return _error("not_found", f"Skill not found: {name}")
+        except OSError as exc:
+            return _error("io_error", f"{exc.strerror or 'Delete failed'}: {name}")
     if action == "save":
-        return _save_skill(name, description, content, invokable, overwrite)
+        # Metadata values are plain single-line strings in the simple frontmatter format.
+        if not version.strip() or any(c in version for c in "\r\n:"):
+            return _error("invalid_version", "version must be a non-empty single-line value without ':'")
+        if tags and any(not tag.strip() or any(c in tag for c in ",\r\n") for tag in tags):
+            return _error("invalid_tags", "tags must be non-empty single-line values without commas")
+        return _save_skill(name, description, content, invokable, overwrite, tags, version)
     return _error("invalid_action", f"Unknown action: {action}")
 
 
 def register(mcp):
     return mcp.tool(description=describe(
         "Manage reusable skills stored as Markdown files in the skills directory. "
-        "Actions: list returns every skill's name, description and invokable flag; "
-        "get returns one skill's full content by name; "
-        "save creates a skill from name, description and content (fails with already_exists "
+        "Actions: list returns name, description, invokable, tags and version; search filters those fields; get/export returns full Markdown; delete removes by name; "
+        'save creates a skill from name, description and content (optional tags as an array of strings, for example ["python", "testing"], and version; fails with already_exists '
         "unless overwrite=true). Failures return error_code (missing_argument, invalid_name, "
         "invalid_description, content_has_frontmatter, skill_too_large, not_found, already_exists, "
         "io_error). "

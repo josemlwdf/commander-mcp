@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import ipaddress
-import json
-import os
+import zlib
 import re
 import socket
 from html.parser import HTMLParser
 from typing import Annotated
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from pydantic import Field
@@ -138,14 +137,22 @@ class _TextExtractor(HTMLParser):
 def _request(url: str) -> tuple[bytes, str, str, int, bool]:
     """Returns (body, final_url, content_type, http_status, truncated)."""
     _public_http_url(url)
-    request = Request(url, headers={"User-Agent": "HandyCoderMCP/2.0", "Accept": "text/html,application/json,text/plain"})
+    request = Request(url, headers={"User-Agent": "HandyCoderMCP/2.0", "Accept": "text/html,application/json,text/plain", "Accept-Encoding": "gzip"})
     opener = build_opener(_SafeRedirect())
     try:
         with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             content_type = response.headers.get_content_type()
             http_status = response.status
             raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if response.headers.get("Content-Encoding", "").lower().strip() == "gzip":
+                compressed_truncated = len(raw) > MAX_RESPONSE_BYTES
+                decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                raw = decoder.decompress(raw, MAX_RESPONSE_BYTES + 1)
+                raw = raw[:MAX_RESPONSE_BYTES + 1]
+            else:
+                compressed_truncated = False
             truncated = len(raw) > MAX_RESPONSE_BYTES
+            truncated = truncated or compressed_truncated
             body = raw[:MAX_RESPONSE_BYTES]
             return body, response.geturl(), content_type, http_status, truncated
     except HTTPError as exc:
@@ -185,62 +192,21 @@ def _fetch(url: str, offset: int = 0) -> dict:
     }
 
 
-def _search(query: str) -> dict:
-    endpoint = os.environ.get("HANDY_CODER_SEARCH_URL", "").strip()
-    if not endpoint:
-        return {"supported": False, "message": "Set HANDY_CODER_SEARCH_URL to a trusted JSON search endpoint to enable web search; direct URL fetching remains available."}
-    parsed = urlparse(endpoint)
-    params = parse_qsl(parsed.query, keep_blank_values=True)
-    params.append(("q", query))
-    search_url = urlunparse(parsed._replace(query=urlencode(params)))
-    body, final_url, content_type, http_status, truncated = _request(search_url)
-    if content_type != "application/json":
-        raise ValueError("Configured search endpoint must return application/json")
-    payload = json.loads(body.decode("utf-8"))
-    results = payload.get("results") if isinstance(payload, dict) else None
-    if not isinstance(results, list):
-        raise ValueError("Configured search endpoint must return a JSON object with a results array")
-    clean = []
-    for item in results[:10]:
-        if isinstance(item, dict) and isinstance(item.get("url"), str):
-            clean.append({
-                "title": str(item.get("title", ""))[:500],
-                "url": item["url"][:2048],
-                "snippet": str(item.get("snippet", ""))[:1200],
-            })
-    return {
-        "supported": True,
-        "search_url": final_url,
-        "final_url": final_url,
-        "status": http_status,
-        "http_status": http_status,
-        "results": clean,
-        "truncated": False,
-    }
-
-
 def web_fetch_docs(
-    url: Annotated[str | None, Field(description="Public HTTP(S) URL to fetch as text. Provide exactly one of url or search_query; private, local, and reserved network targets are blocked.")] = None,
-    search_query: Annotated[str | None, Field(description="Non-empty web search query sent to the trusted endpoint configured by HANDY_CODER_SEARCH_URL. Provide exactly one of url or search_query.")] = None,
+    url: Annotated[str, Field(description="Public HTTP(S) URL to fetch as text; private, local, and reserved network targets are blocked.")],
     offset: Annotated[int, Field(ge=0, description="Character offset into the extracted text to start reading from; use to page through content beyond the initial 20 000-character window.")] = 0,
 ) -> dict:
-    if bool(url) == bool(search_query):
-        raise ValueError("Provide exactly one of url or search_query")
-    if url:
-        return _fetch(url, offset=offset)
-    if not search_query or not search_query.strip():
-        raise ValueError("search_query cannot be empty")
-    return _search(search_query.strip())
+    return _fetch(url, offset=offset)
 
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Fetch public HTTP(S) text or search via HANDY_CODER_SEARCH_URL; private targets are blocked. "
+        "Fetch public HTTP(S) text; private targets are blocked. "
         "Response includes http_status, final_url, total_length, and truncated flag. "
         "Use offset to page through content beyond the initial 20 000-character window; "
         "next_offset in the response is the value to pass on the next call (null when no more content). "
         "HTML <pre> blocks are preserved as fenced Markdown code blocks and inline <code> as `backticks`; "
         "whitespace outside code is collapsed. "
-        "When to use: Read external documentation or find web pages."
+        "When to use: Read external documentation from a known URL."
     ))(web_fetch_docs)
 

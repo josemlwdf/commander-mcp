@@ -12,13 +12,15 @@ def _search_text_impl(
     max_results: int,
     context_lines: int,
     include_generated: bool,
+    case_insensitive: bool = False,
+    extensions: list[str] | None = None,
 ) -> dict:
     if max_results < 1 or max_results > 10000:
         raise ValueError("max_results must be 1..10000")
     if context_lines < 0 or context_lines > 10:
         raise ValueError("context_lines must be 0..10")
     try:
-        rx = re.compile(query if is_regex else re.escape(query))
+        rx = re.compile(query if is_regex else re.escape(query), re.IGNORECASE if case_insensitive else 0)
     except re.error as exc:
         return {
             "error_code": "invalid_regex",
@@ -35,6 +37,8 @@ def _search_text_impl(
     for path, relative_path in iter_workspace_files(
         path_glob=path_glob, errors=errors, exclude_dirs=exclude_dirs
     ):
+        if extensions and path.suffix.lower() not in {e.lower() if e.startswith(".") else "." + e.lower() for e in extensions}:
+            continue
         if time.monotonic() - start_time > 15.0:
             return {
                 "matches": hits,
@@ -86,20 +90,10 @@ def search_text(
     max_results: Annotated[int, Field(ge=1, le=10000, description="Maximum number of matching lines to return, from 1 to 10000.")] = 100,
     context_lines: Annotated[int, Field(ge=0, le=10, description="Number of surrounding context lines to include before and after each match, from 0 to 10.")] = 0,
     include_generated: Annotated[bool, Field(description="When true, also search generated and build directories (node_modules, __pycache__, dist, build, .venv, etc.) that are skipped by default.")] = False,
+    case_insensitive: Annotated[bool, Field(description="Match text without regard to letter case.")] = False,
+    extensions: Annotated[list[str] | None, Field(description='Optional array of file extension strings to search, with or without a leading dot, for example [".py", ".md"].')] = None,
 ) -> dict:
-    return _search_text_impl(query, is_regex, path_glob, max_results, context_lines, include_generated)
-
-
-def code_search_ripgrep(
-    query: Annotated[str, Field(description="Text to search for. Interpreted as a regular expression when is_regex is true, otherwise as a literal string.")],
-    is_regex: Annotated[bool, Field(description="Whether query is a regular expression; defaults to true.")] = True,
-    path_glob: Annotated[str | None, Field(description="Optional glob pattern restricting searched workspace-relative file paths.")] = None,
-    max_results: Annotated[int, Field(ge=1, le=10000, description="Maximum number of matching lines to return, from 1 to 10000.")] = 100,
-    context_lines: Annotated[int, Field(ge=0, le=10, description="Number of surrounding context lines to include before and after each match, from 0 to 10.")] = 0,
-    include_generated: Annotated[bool, Field(description="When true, also search generated and build directories (node_modules, __pycache__, dist, build, .venv, etc.) that are skipped by default.")] = False,
-) -> dict:
-    """Backward-compatible alias for search_text. Prefer search_text for new integrations."""
-    return _search_text_impl(query, is_regex, path_glob, max_results, context_lines, include_generated)
+    return _search_text_impl(query, is_regex, path_glob, max_results, context_lines, include_generated, case_insensitive, extensions)
 
 
 def register(mcp):
@@ -110,11 +104,6 @@ def register(mcp):
         "Generated/build directories (node_modules, __pycache__, dist, build, .venv, etc.) are skipped unless include_generated is true. "
         "total_matches_seen counts every match found; when truncated, omitted_count is how many were not returned "
         "(a lower bound if truncation_reason is time_limit). "
-        "When to use: Find matching code or text."
+        'extensions is an array of strings (for example [".py", ".md"]). When to use: Find matching code or text.'
     )
-    mcp.tool(description=description)(search_text)
-    return mcp.tool(description=describe(
-        "Deprecated alias for search_text with identical behavior and schema; maintained for compatibility. "
-        "Prefer search_text for all new usage; migration is a direct rename from code_search_ripgrep -> search_text with no argument changes. "
-        "When to use: Existing clients that still call code_search_ripgrep."
-    ))(code_search_ripgrep)
+    return mcp.tool(description=description)(search_text)

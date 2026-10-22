@@ -19,7 +19,6 @@ _CONCURRENT_WORKER_LIMIT = 8
 _SEMAPHORE = threading.Semaphore(_CONCURRENT_WORKER_LIMIT)
 DEFAULT_WORKER_DEADLINE = 30.0  # seconds
 _NO_WORKER_TOOLS = {
-    "debug_session_step",
     "defer_commit",
     "subagent_run",
     "subagent_status",
@@ -184,7 +183,7 @@ def supervise_fastmcp_tools(mcp: Any) -> None:
                 result = _target_fn(*args, **kwargs)
             else:
                 deadline = DEFAULT_WORKER_DEADLINE
-                if _tool_name == "terminal_exec":
+                if _tool_name in {"terminal_exec", "build_project"}:
                     timeout_ms = kwargs.get("timeout_ms")
                     if timeout_ms is not None:
                         try:

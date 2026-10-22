@@ -35,15 +35,27 @@ def find_files(
     glob_pattern: Annotated[str, Field(description="Non-empty glob pattern matched against workspace-relative paths and file names.")],
     exclude_pattern: Annotated[str | None, Field(description="Optional glob pattern to exclude matching workspace-relative paths.")] = None,
     include_generated: Annotated[bool, Field(description="When true, also search generated and build directories that are excluded by default.")] = False,
+    file_type: Annotated[str | None, Field(description="Optional extension filter such as .py; file selects all file types.")] = None,
+    min_size: Annotated[int | None, Field(ge=0, description="Optional minimum file size in bytes; files only.")] = None,
+    max_size: Annotated[int | None, Field(ge=0, description="Optional maximum file size in bytes; files only.")] = None,
+    sort_by: Annotated[str, Field(description="Sort results by path (default), size, or modified time.")] = "path",
+    include_metadata: Annotated[bool, Field(description="Include size_bytes and modified_time per result.")] = False,
 ) -> dict:
     if not glob_pattern:
         raise ValueError("glob_pattern cannot be empty")
+    if file_type and file_type not in {"file", "directory"} and not file_type.startswith("."):
+        file_type = "." + file_type
+    if sort_by not in {"path", "size", "modified"}:
+        raise ValueError("sort_by must be path, size, or modified")
+    if min_size is not None and max_size is not None and min_size > max_size:
+        raise ValueError("min_size cannot exceed max_size")
     errors = []
     scoped_glob = glob_pattern if "/" in glob_pattern or "\\" in glob_pattern else None
     found = []
     incomplete = False
     start_time = time.monotonic()
-    for _, relative_path in iter_workspace_files(path_glob=scoped_glob, errors=errors):
+    metadata: dict[str, dict] = {}
+    for path, relative_path in iter_workspace_files(path_glob=scoped_glob, errors=errors):
         if time.monotonic() - start_time > 15.0:
             incomplete = True
             errors.append({
@@ -68,11 +80,21 @@ def find_files(
             continue
         if exclude_pattern and fnmatch.fnmatch(relative_path, exclude_pattern):
             continue
+        if file_type == "file":
+            continue
+        if file_type and path.suffix.lower() != file_type.lower():
+            continue
+        stat = path.stat()
+        if min_size is not None and stat.st_size < min_size or max_size is not None and stat.st_size > max_size:
+            continue
         found.append(relative_path)
+        metadata[relative_path] = {"size_bytes": stat.st_size, "modified_time": stat.st_mtime}
         if len(found) >= MAX_RESULTS:
             incomplete = True
             break
-    return {"files": sorted(found), "errors": errors, "incomplete": incomplete}
+    found.sort(key=(lambda item: metadata[item]["size_bytes"]) if sort_by == "size" else (lambda item: metadata[item]["modified_time"]) if sort_by == "modified" else None)
+    files = [{"path": item, **metadata[item]} for item in found] if include_metadata else found
+    return {"files": files, "errors": errors, "incomplete": incomplete}
 
 
 def register(mcp):
