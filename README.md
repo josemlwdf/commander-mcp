@@ -75,7 +75,7 @@ Alternatively, use the installed entry point:
 }
 ```
 
-The server registers `read_files`, `apply_edits`, `terminal_exec`, `code_search_ripgrep`, `find_files`, `code_get_diagnostics`, `run_tests`, `git_manage`, `lsp_symbol_lookup`, `vector_search_codebase`, `code_format_lint`, `web_fetch_docs`, `debug_session_step`, and `browser_action`.
+The server registers `read_files`, `apply_edits`, `terminal_exec`, `code_search_ripgrep`, `find_files`, `code_get_diagnostics`, `run_tests`, `git_manage`, `lsp_symbol_lookup`, `vector_search_codebase`, `code_format_lint`, `web_fetch_docs`, `debug_session_step`, `browser_action`, `get_capabilities`, and `skills_manage`.
 
 Tool modules are organized by tier: Tier 1 tools live in `lib/core`, and optional Tier 2 tools live in `lib/extras`.
 
@@ -111,6 +111,16 @@ Unfiltered `run_tests` runs require a recognized test setup (for example, pytest
 `code_get_diagnostics` executes recipes and includes the process `exit_code` in its response. `code_format_lint` discloses which formatters and linters were run in `tools_run` and which were missing in `tools_skipped`. `web_fetch_docs` includes `http_status`, `final_url`, and a `truncated` boolean indicator in its response.
 
 `git_manage` discovers Git repositories when first called, so connecting the MCP server does not require scanning the configured workspace. If the configured workspace root is a repository, it reports that root without searching for nested repositories; otherwise it searches descendant directories without following symlinks or entering `.git` metadata. When several repositories are found, pass the listed workspace-relative path as `repo_path` on every action. With one repository, `repo_path` is optional. If none is found, the tool description instructs the agent to warn the user and ask before initializing; `action: "init"` initializes the configured workspace root only when no repository is found, then dynamically updates the tool description advertised to the MCP client. `git_manage` reports `git_unavailable`, `not_a_git_repository`, `git_repository_check_failed`, or `repository_discovery_incomplete` in `error_code` for those failure cases.
+
+### Skills
+
+`skills_manage` stores and retrieves reusable skills, which are Markdown files with a small frontmatter block (`name`, `description`, `invokable`) in the project's `skills` directory. Set `HANDY_CODER_SKILLS_DIR` to use a different directory. The directory is not tied to `--root`.
+
+- `action: "list"` returns every skill's `name`, `description` and `invokable` flag, plus an `errors` array for files that could not be read.
+- `action: "get"` with `name` returns the full `content` and the `body` without frontmatter.
+- `action: "save"` with `name`, `description` and `content` creates a skill. The frontmatter is generated, so `content` must be the body only. It fails with `already_exists` unless `overwrite: true` is passed. Pass `invokable: false` for skills that should not be invoked directly.
+
+Names must be 1-64 characters of lowercase letters, digits and hyphens, which also prevents path traversal. Failures return an `error_code`: `missing_argument`, `invalid_name`, `invalid_description`, `content_has_frontmatter`, `skill_too_large`, `not_found`, `already_exists`, `binary_file` or `io_error`.
 
 ### Optional Tier 2 integrations
 

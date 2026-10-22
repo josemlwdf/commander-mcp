@@ -43,6 +43,7 @@ def get_capabilities() -> dict:
         "terminal_exec":        {"available": True, "note": "always enabled"},
         "code_search_ripgrep":  {"available": True, "note": "uses Python re, not ripgrep"},
         "find_files":           {"available": True, "note": "always enabled"},
+        "skills_manage":        {"available": True, "note": "list, get, or save skills; directory override via HANDY_CODER_SKILLS_DIR"},
         "run_tests":            {"available": pytest_ok, "note": "pytest binary" if not pytest_ok else "pytest found"},
         "git_manage":           {"available": git_ok, "note": "git binary" if not git_ok else "git found"},
         "code_get_diagnostics": {

@@ -34,7 +34,7 @@ except ModuleNotFoundError as exc:
 from lib import support, worker_supervisor
 from lib.core import (
     read_files, apply_edits, terminal_exec, code_search, find_files,
-    diagnostics, run_tests, git_manage, system_info,
+    diagnostics, run_tests, git_manage, system_info, skills,
 )
 from lib.extras import (
     lsp_lookup, semantic_search, code_format_lint, web_fetch, debugger, browser,
@@ -61,7 +61,7 @@ def main() -> None:
     for module in (
         read_files, apply_edits, terminal_exec, code_search, find_files,
         diagnostics, run_tests, git_manage, lsp_lookup, semantic_search,
-        code_format_lint, web_fetch, debugger, browser, system_info,
+        code_format_lint, web_fetch, debugger, browser, system_info, skills,
     ):
         module.register(mcp)
 
