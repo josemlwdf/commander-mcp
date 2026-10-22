@@ -128,6 +128,32 @@ class TerminalSandboxTests(_WorkspaceTestCase):
     def test_control_workspace_relative_launcher_not_rejected(self):
         support.validate_shell_command("./tool --flag", self.root)
 
+    # --- guard hardening: directory changes and env-var expansions --------
+    def _assert_rejected(self, commands):
+        for command in commands:
+            with self.subTest(command=command):
+                with self.assertRaises(ValueError):
+                    support.validate_shell_command(command, self.root)
+
+    def test_control_in_workspace_cd_and_arithmetic_not_rejected(self):
+        for command in ("cd sub", "cd sub && ls", "cd .", "expr 10 / 2", "echo $PWD",
+                        "echo ${PWD}", "ls -l /dev/null"):
+            with self.subTest(command=command):
+                support.validate_shell_command(command, self.root)
+
+    def test_bare_cd_and_cd_dash_are_rejected(self):
+        self._assert_rejected(("cd", "cd -", "cd && ls", "pushd", "pushd -"))
+
+    def test_lone_slash_directory_argument_is_rejected(self):
+        self._assert_rejected(("cd /", "pushd /", "ls /", "find / -name x"))
+
+    def test_braced_home_expansions_are_rejected(self):
+        self._assert_rejected(("cd ${HOME}", "cat ${HOME:-x}/f", "cd ${USERPROFILE}"))
+
+    def test_pwd_and_oldpwd_escapes_are_rejected(self):
+        self._assert_rejected(("cd ${PWD}/..", "cd $PWD/../x", "cd $OLDPWD", "cat $OLDPWD/x",
+                              "cd ${OLDPWD}"))
+
 
 # ----------------------------------------------------------------------
 # read_files: absolute path leakage in error messages

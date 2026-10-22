@@ -218,7 +218,7 @@ def validate_shell_command(command: str, cwd: Path) -> None:
     if re.search(r"(?:\$\((.*?)\)|`([^`]+)`)", command):
         for m in re.finditer(r"\$\((.*?)\)|`([^`]+)`", command):
             validate_shell_command(m.group(1) or m.group(2), cwd)
-    if re.search(r"(?:\$HOME|\$USERPROFILE|%USERPROFILE%|%HOME%|~(?:/|\\|\b))", command, re.I):
+    if _HOME_ESCAPE_RE.search(command) or re.search(r"~(?:/|\\|\b)", command):
         raise ValueError("Command references a home-directory escape outside the authorized workspace")
     for match in re.finditer(r"(?:\d?>|>>|<)\s*([^\s;&|]+)", command):
         target=match.group(1).strip("'\"()")
@@ -236,6 +236,13 @@ def validate_shell_command(command: str, cwd: Path) -> None:
     command_name = ""
     expect_target = False  # previous token was a redirection operator
     expect_script = False  # previous token was `sh -c` style flag
+    requires_directory_target = False
+    saw_directory_target = False
+
+    def _finish_command() -> None:
+        if requires_directory_target and not saw_directory_target:
+            raise ValueError(f"'{command_name}' requires an explicit workspace-relative directory target")
+
     for token in tokens:
         if os.name == "nt": token = token.strip("'\"")
         if token and all(ch in _SHELL_PUNCTUATION for ch in token):
@@ -243,7 +250,9 @@ def validate_shell_command(command: str, cwd: Path) -> None:
                 # `>&` / `<&` duplicate descriptors and heredocs take no path target.
                 expect_target = token[-1] != "&" and token not in ("<<", "<<<")
             else:
+                _finish_command()
                 at_command, command_name, expect_target, expect_script = True, "", False, False
+                requires_directory_target, saw_directory_target = False, False
             continue
         if expect_target:
             expect_target = False
@@ -259,6 +268,8 @@ def validate_shell_command(command: str, cwd: Path) -> None:
                 continue
             at_command = False
             command_name = re.sub(r"\.exe$", "", Path(token.replace("\\", "/")).name.lower())
+            requires_directory_target = command_name in _DIR_CHANGE_COMMANDS
+            saw_directory_target = False
             _check_shell_token(token, cwd, command_position=True)
             continue
         if command_name in _SHELL_INTERPRETERS and (re.fullmatch(r"-[A-Za-z]*c", token) or token.lower() in ("-command", "/c", "/k")):
@@ -269,13 +280,38 @@ def validate_shell_command(command: str, cwd: Path) -> None:
             continue
         if command_name in _LITERAL_ARG_COMMANDS:
             continue  # echo/printf arguments are text, not paths (redirections are still checked)
+        if token == "/" and command_name in _ROOT_PATH_COMMANDS:
+            raise ValueError("Root path '/' is outside the authorized workspace")
+        if requires_directory_target:
+            if token in ("-", "--") or token.startswith("-"):
+                raise ValueError(f"'{command_name} {token}' is not allowed outside a fully isolated shell")
+            saw_directory_target = True
         _check_shell_token(token, cwd)
+
+    _finish_command()
 
 
 _SHELL_PUNCTUATION = frozenset("();<>|&")
 _SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish", "pwsh", "powershell", "cmd"})
 _LITERAL_ARG_COMMANDS = frozenset({"echo", "printf"})
+_DIR_CHANGE_COMMANDS = frozenset({"cd", "pushd", "popd"})
+_ROOT_PATH_COMMANDS = frozenset({"cd", "pushd", "popd", "ls", "find", "cat"})
 _SAFE_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "NUL"})
+_HOME_ESCAPE_RE = re.compile(r"(?:\$(?:HOME|USERPROFILE)\b|%USERPROFILE%|%HOME%|\$\{(?:HOME|USERPROFILE)(?::-[^}]*)?\})", re.I)
+_PWD_PATTERN_RE = re.compile(r"\$(?:PWD|OLDPWD)\b|\$\{(?:PWD|OLDPWD)(?::-[^}]*)?\}", re.I)
+_PWD_RE = re.compile(r"\$(?:PWD)\b|\$\{PWD(?::-[^}]*)?\}", re.I)
+_OLDPWD_RE = re.compile(r"\$(?:OLDPWD)\b|\$\{OLDPWD(?::-[^}]*)?\}", re.I)
+_PARENT_SEGMENT_RE = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
+
+
+def _reject_unsafe_pwd_expansion(candidate: str) -> None:
+    if not _PWD_PATTERN_RE.search(candidate):
+        return
+    if _OLDPWD_RE.search(candidate):
+        raise ValueError("OLDPWD references may resolve outside the authorized workspace")
+    if _PWD_RE.search(candidate) and _PARENT_SEGMENT_RE.search(candidate):
+        raise ValueError("PWD parent traversal may resolve outside the authorized workspace")
+
 
 
 def _split_unquoted_newlines(command: str) -> str:
@@ -316,7 +352,11 @@ def _check_shell_token(token: str, cwd: Path, *, command_position: bool = False)
     candidates = [token]
     if "=" in token: candidates.append(token.split("=", 1)[1])
     for candidate in candidates:
-        if not candidate or candidate == "/" or candidate in _SAFE_DEVICES: continue  # a lone "/" is division
+        if not candidate or candidate in _SAFE_DEVICES:
+            continue
+        _reject_unsafe_pwd_expansion(candidate)
+        if candidate == "/":
+            continue  # a lone "/" is often division; command-specific checks handle path commands
         explicit = (candidate == ".." or candidate.startswith(("./", "../", "/", "~", "\\\\"))
                     or re.match(r"[A-Za-z]:[\\/]", candidate))
         if not (explicit or "/" in candidate or "\\" in candidate): continue
