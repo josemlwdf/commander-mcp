@@ -18,7 +18,7 @@ def read_files(
     ],
     line_ranges: Annotated[
         list[LineRange] | None,
-        Field(description="Optional 1-based line ranges for selected files. Each range's path must match a path in paths; files without a range are read in full."),
+        Field(description="Optional 1-based line ranges for selected files. Each range is an object with keys: path (must match a path in paths), start (first line) and end (last line, >= start); files without a range are read in full."),
     ] = None,
 ) -> dict:
     if not paths:

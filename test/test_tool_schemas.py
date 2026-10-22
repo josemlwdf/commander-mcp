@@ -111,6 +111,41 @@ class ToolSchemaTests(unittest.TestCase):
                                 if "path" in field_name:
                                     self.assertIn("relative", field.description.lower())
 
+    def test_argument_descriptions_name_inner_model_keys(self):
+        """Clients that show only top-level text must still learn the nested key names."""
+        import re
+
+        def field_names(model, seen=()):
+            names = []
+            for field_name, field in model.model_fields.items():
+                names.append(field_name)
+                for nested in _models_in(field.annotation):
+                    if nested not in seen:
+                        names.extend(field_names(nested, seen + (model,)))
+            return names
+
+        checked = 0
+        for name, function in self.mcp.tools.items():
+            hints = get_type_hints(function, include_extras=True)
+            for parameter in inspect.signature(function).parameters:
+                models = list(_models_in(hints[parameter]))
+                if not models:
+                    continue
+                text = " ".join(
+                    item.description
+                    for item in getattr(hints[parameter], "__metadata__", ())
+                    if getattr(item, "description", None)
+                )
+                for model in models:
+                    for key in field_names(model):
+                        checked += 1
+                        with self.subTest(tool=name, argument=parameter, key=key):
+                            self.assertRegex(
+                                text, rf"\b{re.escape(key)}\b",
+                                f"{name}.{parameter} description does not name inner key '{key}'",
+                            )
+        self.assertGreater(checked, 0)
+
     def test_every_tool_argument_has_a_concrete_json_schema(self):
         schema_keywords = {
             "type",

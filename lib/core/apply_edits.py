@@ -32,7 +32,7 @@ def _edit_error(code: str, edit_index: int, message: str, dry_run: bool) -> dict
 def apply_edits(
     edits: Annotated[
         list[Edit],
-        Field(min_length=1, description="Ordered edits to apply to workspace files. Each edit specifies a file, regex pattern, replacement text, and optional starting position."),
+        Field(min_length=1, description="Ordered edits to apply to workspace files. Each edit is an object with keys: path (workspace-relative file), old_str (regex pattern), new_str (literal replacement text), and optional position (object with 1-based keys line and col that limit the search start)."),
     ],
     replace_all: Annotated[
         bool,
