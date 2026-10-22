@@ -661,6 +661,28 @@ class CoreFeedbackTests(unittest.TestCase):
                 self.assertNotIn(str(self.root), result.get("message", ""))
                 self.assertEqual(result.get("edits"), [])
 
+    def test_apply_edits_expand_groups_flag(self):
+        """expand_groups=True expands \\1 / \\g<name>; the default stays literal."""
+        f = self.root / "grp.txt"
+        f.write_text("john smith\n", encoding="utf-8")
+        edit = apply_edits.Edit(
+            path="grp.txt", old_str=r"(?P<first>\w+) (\w+)", new_str=r"\2, \g<first>"
+        )
+
+        literal = self.mcp.tools["apply_edits"]([edit], dry_run=True)
+        self.assertIn(r"+\2, \g<first>", literal["edits"][0]["diff"])
+
+        self.mcp.tools["apply_edits"]([edit], expand_groups=True)
+        self.assertEqual(f.read_text(encoding="utf-8"), "smith, john\n")
+
+        # A reference to a nonexistent group is a structured error, not an exception.
+        f.write_text("john smith\n", encoding="utf-8")
+        bad = apply_edits.Edit(path="grp.txt", old_str=r"(\w+)", new_str=r"\5")
+        result = self.mcp.tools["apply_edits"]([bad], expand_groups=True)
+        self.assertEqual(result.get("error_code"), "invalid_replacement")
+        self.assertEqual(result.get("edit_index"), 0)
+        self.assertEqual(f.read_text(encoding="utf-8"), "john smith\n")
+
     def test_apply_edits_returns_match_count(self):
         """Each result entry must include matches with the replacement count."""
         f = self.root / "multi.txt"

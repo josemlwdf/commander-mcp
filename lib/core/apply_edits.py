@@ -14,7 +14,7 @@ class Edit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(description="Workspace-relative path of the existing file to edit.")
     old_str: str = Field(description="Python regular expression pattern used to locate text to replace. Escape special regex characters like (, ), $, . with \\ for literal matching.")
-    new_str: str = Field(description="Literal replacement text inserted in place of matches. Escape sequences and backreferences are not interpreted.")
+    new_str: str = Field(description="Replacement text inserted in place of matches. Literal by default (escape sequences and backreferences are not interpreted); with expand_groups=true it is a Python re template (\\1, \\g<name>).")
     position: Position | None = Field(default=None, description="Optional 1-based line and column that limits the search to the first match at or after that position.")
 
 
@@ -29,6 +29,11 @@ def _edit_error(code: str, edit_index: int, message: str, dry_run: bool) -> dict
     }
 
 
+def _expand(match: re.Match, template: str, expand_groups: bool) -> str:
+    # match.expand raises re.error for unknown group references or bad escapes.
+    return match.expand(template) if expand_groups else template
+
+
 def apply_edits(
     edits: Annotated[
         list[Edit],
@@ -41,6 +46,10 @@ def apply_edits(
     dry_run: Annotated[
         bool,
         Field(description="If true, validate and compute diffs for all edits but do not write any changes to disk."),
+    ] = False,
+    expand_groups: Annotated[
+        bool,
+        Field(description="If true, new_str is a Python re replacement template: \\1 and \\g<name> insert capture groups and backslash escapes are interpreted. Defaults to false (new_str is literal)."),
     ] = False,
 ) -> dict:
     # Phase 1: Validate and stage all edits in memory
@@ -92,18 +101,29 @@ def apply_edits(
             if not match:
                 return _edit_error("no_match", edit_index, f"Pattern did not match in {name}", dry_run)
             a, b = offset + match.start(), offset + match.end()
-            after = before[:a] + edit.new_str + before[b:]
+            try:
+                new_text = _expand(match, edit.new_str, expand_groups)
+            except re.error as exc:
+                return _edit_error("invalid_replacement", edit_index, f"Invalid replacement in new_str: {exc}", dry_run)
+            after = before[:a] + new_text + before[b:]
             match_count = 1
         else:
             if replace_all:
-                after, match_count = rx.subn(lambda _: edit.new_str, before, count=0)
+                try:
+                    after, match_count = rx.subn(lambda m: _expand(m, edit.new_str, expand_groups), before, count=0)
+                except re.error as exc:
+                    return _edit_error("invalid_replacement", edit_index, f"Invalid replacement in new_str: {exc}", dry_run)
                 if match_count == 0:
                     return _edit_error("no_match", edit_index, f"Pattern did not match in {name}", dry_run)
             else:
                 match = rx.search(before)
                 if not match:
                     return _edit_error("no_match", edit_index, f"Pattern did not match in {name}", dry_run)
-                after = before[:match.start()] + edit.new_str + before[match.end():]
+                try:
+                    new_text = _expand(match, edit.new_str, expand_groups)
+                except re.error as exc:
+                    return _edit_error("invalid_replacement", edit_index, f"Invalid replacement in new_str: {exc}", dry_run)
+                after = before[:match.start()] + new_text + before[match.end():]
                 match_count = 1
 
         diff = "".join(difflib.unified_diff(
@@ -143,7 +163,7 @@ def register(mcp):
     return mcp.tool(description=describe(
         "Apply regex edits to workspace files; replace_all defaults to false; dry_run=true validates without writing. "
         "Validates and stages the entire batch before writing; a later invalid edit leaves earlier edits unapplied. "
-        "old_str is a Python regular expression pattern (re module); new_str is literal replacement text. "
+        "old_str is a Python regular expression pattern (re module); new_str is literal replacement text unless expand_groups=true (Python re template: \\1, \\g<name>; a bad reference returns error_code='invalid_replacement'). "
         "Error messages include the zero-based edit index ([edit N]) for easy identification. "
         "Edit failures return error_code (invalid_regex, no_match, not_found, path_escape, not_a_file, binary_file, io_error) "
         "with edit_index and message instead of raising; nothing is written. "
