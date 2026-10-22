@@ -793,6 +793,43 @@ class CoreFeedbackTests(unittest.TestCase):
         self.assertEqual(result["check"], "mypy")
         self.assertTrue(result["ok"])
 
+    def test_diagnostics_malformed_config_returns_invalid_config(self):
+        """A malformed config file must yield a structured error, not a decode exception."""
+        (self.root / "package.json").write_text("{not json", encoding="utf-8")
+        result = self.mcp.tools["code_get_diagnostics"]()
+        self.assertEqual(result.get("error_code"), "invalid_config")
+        self.assertFalse(result.get("ok"))
+        self.assertEqual([e["file"] for e in result["config_errors"]], ["package.json"])
+
+        (self.root / "package.json").unlink()
+        (self.root / "pyproject.toml").write_text("[tool.ruff\n", encoding="utf-8")
+        result = self.mcp.tools["code_get_diagnostics"]()
+        self.assertEqual(result.get("error_code"), "invalid_config")
+        self.assertEqual([e["file"] for e in result["config_errors"]], ["pyproject.toml"])
+        self.assertNotIn(str(self.root), str(result["config_errors"]))
+
+    def test_diagnostics_reports_skipped_candidates_and_config_errors(self):
+        """Fallback history must be visible: skipped tools and unusable config files."""
+        (self.root / "package.json").write_text("{not json", encoding="utf-8")
+        (self.root / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 88\n[tool.mypy]\nstrict = true\n", encoding="utf-8"
+        )
+        ruff_missing = {
+            "stdout": "", "stderr": "Failed to start process: [Errno 2] 'ruff'",
+            "exit_code": 1, "timed_out": False, "duration_ms": 1,
+        }
+        mypy_ok = {
+            "stdout": "ok", "stderr": "", "exit_code": 0,
+            "timed_out": False, "duration_ms": 5,
+        }
+        with patch("lib.core.diagnostics.run_process", side_effect=[ruff_missing, mypy_ok]):
+            result = self.mcp.tools["code_get_diagnostics"]()
+        self.assertEqual(result["check"], "mypy")
+        self.assertEqual(
+            result["skipped"], [{"check": "ruff", "error_code": "tool_not_installed"}]
+        )
+        self.assertEqual([e["file"] for e in result["config_errors"]], ["package.json"])
+
     def test_run_tests_parser_extracts_failures_list(self):
         """FAILED lines must be parsed into parsed.failures with test_id and file."""
         output = (
