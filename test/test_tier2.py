@@ -236,6 +236,172 @@ while True:
         self.assertIn("ruff", result["tools_run"])
         self.assertIn("tools_skipped", result)
 
+    # ------------------------------------------------------------------
+    # Audit fix tests — tier-2 tools
+    # ------------------------------------------------------------------
+
+    def test_format_lint_tools_skipped_entries_have_reason(self):
+        """tools_skipped entries must be dicts with 'tool' and 'reason' keys."""
+        with patch("lib.extras.code_format_lint.shutil.which", return_value=None):
+            result = self.tools.tools["code_format_lint"](
+                ["test/test_tier2.py"], language="python"
+            )
+        self.assertFalse(result["supported"])
+        for entry in result["tools_skipped"]:
+            with self.subTest(entry=entry):
+                self.assertIsInstance(entry, dict)
+                self.assertIn("tool", entry)
+                self.assertIn("reason", entry)
+
+    def test_format_lint_fix_returns_diffs_for_changed_files(self):
+        """fix=True must return a 'diffs' dict; unchanged files are omitted."""
+        import tempfile as _tempfile
+        import shutil as _shutil
+
+        black_path = _shutil.which("black")
+        ruff_path = _shutil.which("ruff")
+        if not black_path and not ruff_path:
+            self.skipTest("neither black nor ruff installed")
+
+        with _tempfile.TemporaryDirectory() as tmp:
+            from lib import support as _support
+            _support.configure(tmp)
+            ugly = (Path(tmp) / "ugly.py")
+            ugly.write_text("x=1\n", encoding="utf-8")
+            result = self.tools.tools["code_format_lint"](
+                ["ugly.py"], fix=True, language="python"
+            )
+            _support.configure(str(Path(__file__).resolve().parents[1]))
+
+        self.assertTrue(result["supported"])
+        self.assertIn("diffs", result)
+        self.assertIsInstance(result["diffs"], dict)
+
+    def test_format_lint_mixed_languages_gives_clear_error(self):
+        """Mixing .py and .js paths must give a message about mixed languages."""
+        import tempfile as _tempfile
+        with _tempfile.TemporaryDirectory() as tmp:
+            from lib import support as _support
+            _support.configure(tmp)
+            (Path(tmp) / "a.py").write_text("x=1", encoding="utf-8")
+            (Path(tmp) / "b.js").write_text("var x=1;", encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.tools["code_format_lint"](["a.py", "b.js"])
+            _support.configure(str(Path(__file__).resolve().parents[1]))
+        self.assertIn("Python", str(ctx.exception))
+
+    def test_format_lint_unsupported_extension_gives_clear_error(self):
+        """An unsupported extension (e.g. .txt) must give a message listing extensions."""
+        import tempfile as _tempfile
+        with _tempfile.TemporaryDirectory() as tmp:
+            from lib import support as _support
+            _support.configure(tmp)
+            (Path(tmp) / "notes.txt").write_text("hello", encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.tools["code_format_lint"](["notes.txt"])
+            _support.configure(str(Path(__file__).resolve().parents[1]))
+        msg = str(ctx.exception)
+        self.assertIn(".txt", msg)
+        self.assertNotIn("Python", msg)  # not a mixed-language error
+
+    def test_lsp_config_check_runs_before_argument_validation(self):
+        """When HANDY_CODER_LSP_COMMAND is unset, supported:false is returned
+        even before argument validation would run."""
+        # README.md exists in the project root; position is valid.
+        with patch.dict(os.environ, {"HANDY_CODER_LSP_COMMAND": ""}):
+            result = self.tools.tools["lsp_symbol_lookup"](
+                "main", "README.md", lsp_lookup.Position(line=0, character=0)
+            )
+        self.assertFalse(result["supported"])
+        self.assertNotIn("error", result)
+
+    def test_debugger_config_check_runs_before_cross_field_validation(self):
+        """When HANDY_CODER_DAP_PORT is unset, supported:false is returned
+        even if breakpoint_file/line cross-field constraint would trigger."""
+        with patch.dict(os.environ, {"HANDY_CODER_DAP_PORT": ""}):
+            # line without breakpoint_file would normally raise ValueError;
+            # with no port configured we expect supported:false instead.
+            result = self.tools.tools["debug_session_step"]("start", line=10)
+        self.assertFalse(result["supported"])
+
+    def test_web_fetch_offset_pages_through_content(self):
+        """offset parameter must slice the extracted text at the right position."""
+        long_html = b"<html><p>" + b"A" * 25000 + b"</p></html>"
+        with patch.object(web_fetch, "_request", return_value=(
+            long_html, "https://example.com/", "text/html", 200, False,
+        )):
+            first = web_fetch._fetch("https://example.com/", offset=0)
+            second = web_fetch._fetch("https://example.com/", offset=20000)
+
+        # The window is 20 000 characters; first page should be exactly 20 000.
+        self.assertEqual(len(first["content"]), 20000)
+        # Second page should be the remainder (total_length - 20000).
+        total = first["total_length"]
+        expected_second = total - 20000
+        self.assertEqual(len(second["content"]), expected_second)
+        self.assertNotEqual(first["content"], second["content"])
+        # next_offset is populated when there is more content.
+        self.assertEqual(first.get("next_offset"), 20000)
+        # No more content after second window.
+        self.assertIsNone(second.get("next_offset"))
+
+    def test_web_fetch_no_duplicate_status_field(self):
+        """The response must have http_status but not the duplicate status field."""
+        with patch.object(web_fetch, "_request", return_value=(
+            b"<html><title>T</title><p>Hi</p></html>",
+            "https://example.com/", "text/html", 200, False,
+        )):
+            result = web_fetch._fetch("https://example.com/")
+        self.assertIn("http_status", result)
+        self.assertNotIn("status", result)
+
+    def test_web_fetch_preserves_pre_and_code_blocks(self):
+        """HTML <pre> and <code> blocks should be marked with markdown code fences."""
+        html = b"<html><p>Normal text</p><pre>def foo():\n    return 42</pre></html>"
+        with patch.object(web_fetch, "_request", return_value=(
+            html, "https://example.com/code", "text/html", 200, False,
+        )):
+            result = web_fetch._fetch("https://example.com/code")
+        self.assertIn("```", result["content"])
+        self.assertIn("def foo():", result["content"])
+
+    def test_format_lint_ok_true_when_reports_pass(self):
+        """ok must be True when all tools run and exit with code 0."""
+        pass_result = {
+            "stdout": "", "stderr": "", "exit_code": 0,
+            "timed_out": False, "duration_ms": 10,
+        }
+        with patch("lib.extras.code_format_lint.shutil.which", return_value="/usr/bin/ruff"), \
+             patch("lib.extras.code_format_lint.run_process", return_value=pass_result):
+            result = self.tools.tools["code_format_lint"](["test/test_tier2.py"], language="python")
+        self.assertTrue(result["supported"])
+        self.assertTrue(result.get("ok"))
+
+    def test_format_lint_ok_false_when_report_fails(self):
+        """ok must be False when any tool exits with non-zero code."""
+        fail_result = {
+            "stdout": "error", "stderr": "", "exit_code": 1,
+            "timed_out": False, "duration_ms": 10,
+        }
+        with patch("lib.extras.code_format_lint.shutil.which", return_value="/usr/bin/ruff"), \
+             patch("lib.extras.code_format_lint.run_process", return_value=fail_result):
+            result = self.tools.tools["code_format_lint"](["test/test_tier2.py"], language="python")
+        self.assertTrue(result["supported"])
+        self.assertFalse(result.get("ok"))
+
+    def test_format_lint_report_tool_not_installed(self):
+        """When a tool binary fails to start, report should have error_code='tool_not_installed'."""
+        fail_to_start = {
+            "stdout": "", "stderr": "Failed to start process: not found", "exit_code": 1,
+            "timed_out": False, "duration_ms": 1,
+        }
+        with patch("lib.extras.code_format_lint.shutil.which", return_value="/usr/bin/ruff"), \
+             patch("lib.extras.code_format_lint.run_process", return_value=fail_to_start):
+            result = self.tools.tools["code_format_lint"](["test/test_tier2.py"], language="python")
+        self.assertTrue(result["supported"])
+        self.assertFalse(result.get("ok"))
+        self.assertTrue(any(r.get("error_code") == "tool_not_installed" for r in result["reports"]))
+
 
 if __name__ == "__main__":
     unittest.main()

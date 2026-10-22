@@ -295,7 +295,14 @@ def register(mcp):
     def debug_session_step(
         action: Annotated[
             Literal["start", "step_over", "step_into", "inspect_vars", "stop"],
-            Field(description="Debugger operation: start a session, step over or into the current line, inspect current-frame variables, or stop the session."),
+            Field(description=(
+                "Debugger operation. "
+                "start: begin a new session using HANDY_CODER_DAP_START_REQUEST (launch or attach). "
+                "step_over: advance past the current line without entering function calls. "
+                "step_into: step into the function call on the current line. "
+                "inspect_vars: return variables visible in the current stack frame. "
+                "stop: disconnect from the adapter and end the session."
+            )),
         ],
         breakpoint_file: Annotated[
             str | None,
@@ -312,6 +319,9 @@ def register(mcp):
                 "supported": False,
                 "message": "Set HANDY_CODER_DAP_PORT and configure a local DAP adapter to enable debugging.",
             }
+        # Validate cross-field constraint only after confirming the tool is configured.
+        if line is not None and breakpoint_file is None:
+            raise ValueError("breakpoint_file is required when line is provided")
 
         start_request = os.environ.get("HANDY_CODER_DAP_START_REQUEST", "").strip()
         adapter_id = os.environ.get("HANDY_CODER_DAP_ADAPTER_ID", "python")

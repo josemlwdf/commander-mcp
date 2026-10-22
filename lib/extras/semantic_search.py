@@ -88,6 +88,8 @@ def vector_search_codebase(
 def register(mcp):
     return mcp.tool(description=describe(
         "Search source semantically with local model HANDY_CODER_EMBEDDING_MODEL; downloads are disabled. "
+        f"Indexes on demand up to {MAX_FILES} workspace source files (max {MAX_FILE_BYTES // 1024} KiB each). "
+        "Returns top_k ranked file matches with cosine similarity scores (score) and snippets up to 1200 characters. "
         "Requires sentence-transformers and HANDY_CODER_EMBEDDING_MODEL. "
         "When to use: Find code by concept or intent."
     ))(vector_search_codebase)

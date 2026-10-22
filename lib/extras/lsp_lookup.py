@@ -19,8 +19,8 @@ from ..support import inside, describe
 
 class Position(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    line: int = Field(ge=0, description="0-based source line containing the symbol position.")
-    character: int = Field(ge=0, description="0-based character offset within the source line.")
+    line: int = Field(ge=0, description="0-based source line (first line is 0). Note: uses LSP 0-based coordinates, not the 1-based coordinates used by apply_edits.")
+    character: int = Field(ge=0, description="0-based character offset within the line (first character is 0).")
 
 
 def _reader(stream, messages: queue.Queue) -> None:
@@ -116,6 +116,11 @@ def lsp_symbol_lookup(
     path: Annotated[str, Field(description="Workspace-relative path to the source file.")],
     position: Annotated[Position, Field(description="0-based line and character position used to request the definition from the language server.")],
 ) -> dict:
+        # Check configuration first so the client learns the feature is off
+        # before spending effort validating arguments.
+        configured = os.environ.get("HANDY_CODER_LSP_COMMAND", "").strip()
+        if not configured:
+            return {"supported": False, "message": "Set HANDY_CODER_LSP_COMMAND to a local language-server command to enable LSP lookup."}
         if not symbol_name.strip():
             raise ValueError("symbol_name cannot be empty")
         source = inside(path, must_exist=True)
@@ -123,9 +128,6 @@ def lsp_symbol_lookup(
             raise ValueError(f"Not a file: {path}")
         if position.line < 0 or position.character < 0:
             raise ValueError("LSP line and character positions are 0-based and must be non-negative")
-        configured = os.environ.get("HANDY_CODER_LSP_COMMAND", "").strip()
-        if not configured:
-            return {"supported": False, "message": "Set HANDY_CODER_LSP_COMMAND to a local language-server command to enable LSP lookup."}
         command = shlex.split(configured, posix=os.name != "nt")
         if not command:
             raise ValueError("HANDY_CODER_LSP_COMMAND must contain an executable")

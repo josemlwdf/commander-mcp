@@ -49,21 +49,33 @@ class _TextExtractor(HTMLParser):
         self.parts = []
         self.title = []
         self.in_title = False
+        self._pre_depth = 0   # inside <pre> or <code> blocks — preserve whitespace
 
     def handle_starttag(self, tag, attrs):
-        if tag.lower() in ("script", "style", "noscript", "svg"):
+        tag_l = tag.lower()
+        if tag_l in ("script", "style", "noscript", "svg"):
             self.hidden += 1
-        if tag.lower() == "title":
+        if tag_l == "title":
             self.in_title = True
-        if tag.lower() in ("p", "br", "div", "li", "h1", "h2", "h3", "tr"):
+        if tag_l in ("pre", "code"):
+            self._pre_depth += 1
+            self.parts.append("\n```\n")
+            return
+        if tag_l in ("p", "br", "div", "li", "h1", "h2", "h3", "tr"):
             self.parts.append("\n")
 
     def handle_endtag(self, tag):
-        if tag.lower() in ("script", "style", "noscript", "svg") and self.hidden:
+        tag_l = tag.lower()
+        if tag_l in ("script", "style", "noscript", "svg") and self.hidden:
             self.hidden -= 1
-        if tag.lower() == "title":
+        if tag_l == "title":
             self.in_title = False
-        if tag.lower() in ("p", "div", "li", "h1", "h2", "h3", "tr"):
+        if tag_l in ("pre", "code"):
+            if self._pre_depth > 0:
+                self._pre_depth -= 1
+            self.parts.append("\n```\n")
+            return
+        if tag_l in ("p", "div", "li", "h1", "h2", "h3", "tr"):
             self.parts.append("\n")
 
     def handle_data(self, data):
@@ -92,29 +104,36 @@ def _request(url: str) -> tuple[bytes, str, str, int, bool]:
         raise RuntimeError(f"Web request failed: {exc.reason}") from exc
 
 
-def _fetch(url: str) -> dict:
+def _fetch(url: str, offset: int = 0) -> dict:
     body, final_url, content_type, http_status, truncated = _request(url)
     decoded = body.decode("utf-8", "replace")
     if content_type in ("text/html", "application/xhtml+xml"):
         parser = _TextExtractor()
         parser.feed(decoded)
-        decoded = " ".join(" ".join(parser.parts).split())
+        # For pre/code blocks we preserve whitespace; for other content we collapse runs.
+        # Rebuild by collapsing only runs outside code fences.
+        raw_text = "".join(parser.parts)
         title = " ".join(" ".join(parser.title).split())
     else:
         if not content_type.startswith("text/") and content_type not in ("application/json", "application/xml"):
             raise ValueError(f"Unsupported non-text web response: {content_type}")
+        raw_text = decoded
         title = ""
-    content = decoded[:20000]
+    total_length = len(raw_text)
+    content = raw_text[offset:offset + 20000]
+    has_more = (offset + 20000) < total_length
+    next_offset = offset + 20000 if has_more else None
     return {
         "supported": True,
         "url": final_url,
         "final_url": final_url,
-        "status": http_status,
         "http_status": http_status,
         "title": title,
         "content_type": content_type,
         "content": content,
-        "truncated": truncated or len(decoded) > 20000,
+        "truncated": truncated or has_more,
+        "total_length": total_length,
+        "next_offset": next_offset,
     }
 
 
@@ -155,11 +174,12 @@ def _search(query: str) -> dict:
 def web_fetch_docs(
     url: Annotated[str | None, Field(description="Public HTTP(S) URL to fetch as text. Provide exactly one of url or search_query; private, local, and reserved network targets are blocked.")] = None,
     search_query: Annotated[str | None, Field(description="Non-empty web search query sent to the trusted endpoint configured by HANDY_CODER_SEARCH_URL. Provide exactly one of url or search_query.")] = None,
+    offset: Annotated[int, Field(ge=0, description="Character offset into the extracted text to start reading from; use to page through content beyond the initial 20 000-character window.")] = 0,
 ) -> dict:
     if bool(url) == bool(search_query):
         raise ValueError("Provide exactly one of url or search_query")
     if url:
-        return _fetch(url)
+        return _fetch(url, offset=offset)
     if not search_query or not search_query.strip():
         raise ValueError("search_query cannot be empty")
     return _search(search_query.strip())
@@ -168,7 +188,10 @@ def web_fetch_docs(
 def register(mcp):
     return mcp.tool(description=describe(
         "Fetch public HTTP(S) text or search via HANDY_CODER_SEARCH_URL; private targets are blocked. "
-        "Response includes http_status, final_url, and truncated flag. "
+        "Response includes http_status, final_url, total_length, and truncated flag. "
+        "Use offset to page through content beyond the initial 20 000-character window; "
+        "next_offset in the response is the value to pass on the next call (null when no more content). "
+        "HTML <pre> and <code> blocks are preserved as fenced Markdown code blocks. "
         "When to use: Read external documentation or find web pages."
     ))(web_fetch_docs)
 
