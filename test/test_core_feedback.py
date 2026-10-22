@@ -308,11 +308,11 @@ class CoreFeedbackTests(unittest.TestCase):
         file_a = self.root / "a.txt"
         file_a.write_text("hello world\n", encoding="utf-8")
 
-        with self.assertRaises(ValueError):
-            self.mcp.tools["apply_edits"]([
-                apply_edits.Edit(path="a.txt", old_str="hello", new_str="goodbye"),
-                apply_edits.Edit(path="a.txt", old_str="DOES_NOT_EXIST", new_str="x"),
-            ])
+        result = self.mcp.tools["apply_edits"]([
+            apply_edits.Edit(path="a.txt", old_str="hello", new_str="goodbye"),
+            apply_edits.Edit(path="a.txt", old_str="DOES_NOT_EXIST", new_str="x"),
+        ])
+        self.assertEqual(result.get("error_code"), "no_match")
 
         # File a.txt must be unchanged because the batch was rejected
         self.assertEqual(file_a.read_text(encoding="utf-8"), "hello world\n")
@@ -597,16 +597,16 @@ class CoreFeedbackTests(unittest.TestCase):
         self.assertEqual(error_codes["bad.bin"], "binary_file")
 
     def test_apply_edits_error_includes_edit_index(self):
-        """ValueError for a failed edit must mention the zero-based [edit N] index."""
+        """A failed edit must mention the zero-based [edit N] index in its message."""
         f = self.root / "target.txt"
         f.write_text("hello world\n", encoding="utf-8")
 
-        with self.assertRaises(ValueError) as ctx:
-            self.mcp.tools["apply_edits"]([
-                apply_edits.Edit(path="target.txt", old_str="hello", new_str="hi"),
-                apply_edits.Edit(path="target.txt", old_str="NOPE", new_str="x"),
-            ])
-        self.assertIn("[edit 1]", str(ctx.exception))
+        result = self.mcp.tools["apply_edits"]([
+            apply_edits.Edit(path="target.txt", old_str="hello", new_str="hi"),
+            apply_edits.Edit(path="target.txt", old_str="NOPE", new_str="x"),
+        ])
+        self.assertIn("[edit 1]", result.get("message", ""))
+        self.assertEqual(result.get("edit_index"), 1)
 
     def test_apply_edits_returns_invalid_regex_error_code(self):
         """An invalid regex must yield a structured error, not an exception, and write nothing."""
@@ -623,6 +623,43 @@ class CoreFeedbackTests(unittest.TestCase):
         self.assertIn("[edit 1]", result.get("message", ""))
         self.assertEqual(result.get("edits"), [])
         self.assertEqual(f.read_text(encoding="utf-8"), "hello world\n")
+
+    def test_apply_edits_returns_no_match_error_code(self):
+        """A pattern that matches nothing must return no_match and write nothing."""
+        f = self.root / "nm.txt"
+        f.write_text("hello world\n", encoding="utf-8")
+
+        result = self.mcp.tools["apply_edits"]([
+            apply_edits.Edit(path="nm.txt", old_str="hello", new_str="hi"),
+            apply_edits.Edit(path="nm.txt", old_str="NOPE", new_str="x"),
+        ])
+
+        self.assertEqual(result.get("error_code"), "no_match")
+        self.assertEqual(result.get("edit_index"), 1)
+        self.assertIn("[edit 1]", result.get("message", ""))
+        self.assertEqual(result.get("edits"), [])
+        self.assertEqual(f.read_text(encoding="utf-8"), "hello world\n")
+
+    def test_apply_edits_returns_path_error_codes(self):
+        """Bad paths must return structured codes without leaking host paths."""
+        (self.root / "adir").mkdir()
+        (self.root / "bin.dat").write_bytes(b"\xff\xfe\x00\x80")
+        cases = [
+            ("missing.txt", "not_found"),
+            ("../outside.txt", "path_escape"),
+            ("adir", "not_a_file"),
+            ("bin.dat", "binary_file"),
+        ]
+        for path, code in cases:
+            with self.subTest(path=path):
+                result = self.mcp.tools["apply_edits"](
+                    [apply_edits.Edit(path=path, old_str="x", new_str="y")]
+                )
+                self.assertEqual(result.get("error_code"), code)
+                self.assertEqual(result.get("edit_index"), 0)
+                self.assertIn("[edit 0]", result.get("message", ""))
+                self.assertNotIn(str(self.root), result.get("message", ""))
+                self.assertEqual(result.get("edits"), [])
 
     def test_apply_edits_returns_match_count(self):
         """Each result entry must include matches with the replacement count."""
