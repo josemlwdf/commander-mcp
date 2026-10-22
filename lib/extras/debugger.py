@@ -320,6 +320,8 @@ def register(mcp):
                 "error_code": "not_configured",
                 "env_var": "HANDY_CODER_DAP_PORT",
                 "message": "Set HANDY_CODER_DAP_PORT and configure a local DAP adapter to enable debugging.",
+                "hint": "Also set HANDY_CODER_DAP_START_REQUEST to JSON with command=launch|attach and arguments.",
+                "next_step": "See docs/SETUP.md#dap-debug_session_step for setup instructions.",
             }
         # Validate cross-field constraint only after confirming the tool is configured.
         if line is not None and breakpoint_file is None:

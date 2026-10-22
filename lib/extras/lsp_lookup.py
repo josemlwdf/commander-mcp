@@ -125,6 +125,8 @@ def lsp_symbol_lookup(
                 "error_code": "not_configured",
                 "env_var": "HANDY_CODER_LSP_COMMAND",
                 "message": "Set HANDY_CODER_LSP_COMMAND to a local language-server command to enable LSP lookup.",
+                "hint": "Example: HANDY_CODER_LSP_COMMAND='pylsp'. Then verify with get_capabilities and retry.",
+                "next_step": "See docs/SETUP.md#lsp-lsp_symbol_lookup for setup instructions.",
             }
         if not symbol_name.strip():
             raise ValueError("symbol_name cannot be empty")

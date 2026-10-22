@@ -388,5 +388,5 @@ def result_text(value: object) -> str:
 def describe(text: str, *, include_working_directory: bool = False) -> str:
     working_directory = f" Working directory: {WORKING_DIRECTORY}." if include_working_directory else ""
     return (
-        f"{text}{working_directory}"
+        f"{text}{working_directory} Use relative paths."
     )

@@ -34,7 +34,9 @@ def get_capabilities() -> dict:
 
     # Environment-variable gated features
     lsp_configured = bool(os.environ.get("HANDY_CODER_LSP_COMMAND", "").strip())
-    dap_configured = bool(os.environ.get("HANDY_CODER_DAP_PORT", "").strip())
+    dap_port_configured = bool(os.environ.get("HANDY_CODER_DAP_PORT", "").strip())
+    dap_start_configured = bool(os.environ.get("HANDY_CODER_DAP_START_REQUEST", "").strip())
+    dap_configured = dap_port_configured and dap_start_configured
     search_configured = bool(os.environ.get("HANDY_CODER_SEARCH_URL", "").strip())
     embedding_configured = bool(os.environ.get("HANDY_CODER_EMBEDDING_MODEL", "").strip())
 
@@ -75,23 +77,40 @@ def get_capabilities() -> dict:
         "lsp_symbol_lookup": {
             "available": lsp_configured,
             "configured": lsp_configured,
+            "missing_requirements": [] if lsp_configured else ["HANDY_CODER_LSP_COMMAND"],
             "note": "requires HANDY_CODER_LSP_COMMAND",
+            "setup_docs": "docs/SETUP.md#lsp-lsp_symbol_lookup",
         },
         "debug_session_step": {
             "available": dap_configured,
             "configured": dap_configured,
+            "missing_requirements": [
+                name for name, ok in {
+                    "HANDY_CODER_DAP_PORT": dap_port_configured,
+                    "HANDY_CODER_DAP_START_REQUEST": dap_start_configured,
+                }.items() if not ok
+            ],
             "note": "requires HANDY_CODER_DAP_PORT + HANDY_CODER_DAP_START_REQUEST",
+            "setup_docs": "docs/SETUP.md#dap-debug_session_step",
         },
         "vector_search_codebase": {
             "available": embedding_configured and sentence_transformers_ok,
             "configured": embedding_configured,
             "sentence_transformers_installed": sentence_transformers_ok,
+            "missing_requirements": [
+                *([] if embedding_configured else ["HANDY_CODER_EMBEDDING_MODEL"]),
+                *([] if sentence_transformers_ok else ["sentence-transformers package"]),
+            ],
             "note": "requires HANDY_CODER_EMBEDDING_MODEL + sentence-transformers package",
+            "setup_docs": "docs/SETUP.md#semantic-search-vector_search_codebase",
         },
         "browser_action": {
             "available": playwright_ok,
+            "configured": playwright_ok,
             "playwright_installed": playwright_ok,
+            "missing_requirements": [] if playwright_ok else ["playwright package (and Chromium runtime)"],
             "note": "requires optional playwright package + Chromium",
+            "setup_docs": "docs/SETUP.md#browser-automation-browser_action",
         },
         "subagent_run": {"available": True, "backend": subagent_backend, "note": "start subagent task"},
         "subagent_status": {"available": True, "backend": subagent_backend, "note": "poll task state"},
@@ -106,7 +125,8 @@ def get_capabilities() -> dict:
         "tools": tools,
         "env": {
             "HANDY_CODER_LSP_COMMAND": lsp_configured,
-            "HANDY_CODER_DAP_PORT": dap_configured,
+            "HANDY_CODER_DAP_PORT": dap_port_configured,
+            "HANDY_CODER_DAP_START_REQUEST": dap_start_configured,
             "HANDY_CODER_SEARCH_URL": search_configured,
             "HANDY_CODER_EMBEDDING_MODEL": embedding_configured,
             "SUBAGENT_BACKEND": bool(os.environ.get("SUBAGENT_BACKEND", "").strip()),
@@ -121,6 +141,7 @@ def register(mcp):
         "Return server health and capability status: which tools are available, "
         "which optional binaries (git, ruff, black, eslint, prettier, pytest) are installed, "
         "and which environment-variable gated features (LSP, DAP, search, semantic search, browser) are active. "
+        "For optional integrations, tool entries include missing_requirements and setup_docs where applicable. "
         "Call this first to avoid wasting turns discovering disabled tools. "
         "When to use: Check what tools are usable before planning a task."
     ))(get_capabilities)

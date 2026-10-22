@@ -5,28 +5,55 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
 from ..support import inside, describe
 
+
 class Position(BaseModel):
     model_config = ConfigDict(extra="forbid")
     line: int = Field(ge=1, description="1-based line where the first regex match search begins.")
     col: int = Field(ge=1, description="1-based column where the first regex match search begins.")
 
+
 class Edit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(description="Workspace-relative path of the existing file to edit.")
-    old_str: str = Field(description="Python regular expression pattern used to locate text to replace. Escape special regex characters like (, ), $, . with \\ for literal matching.")
-    new_str: str = Field(description="Replacement text inserted in place of matches. Literal by default (escape sequences and backreferences are not interpreted); with expand_groups=true it is a Python re template (\\1, \\g<name>).")
+    old_str: str | None = Field(default=None, description="Deprecated name for regex pattern. Prefer pattern.")
+    new_str: str | None = Field(default=None, description="Deprecated name for replacement text. Prefer replacement.")
+    pattern: str | None = Field(default=None, description="Python regular expression pattern used to locate text to replace. Escape special regex characters like (, ), $, . with \\ for literal matching.")
+    replacement: str | None = Field(default=None, description="Replacement text inserted in place of matches. Literal by default (escape sequences and backreferences are not interpreted); with expand_groups=true it is a Python re template (\\1, \\g<name>).")
     position: Position | None = Field(default=None, description="Optional 1-based line and column that limits the search to the first match at or after that position.")
 
+    def regex_pattern(self) -> str:
+        pattern = getattr(self, "pattern", None)
+        old_str = getattr(self, "old_str", None)
+        if pattern is not None and old_str is not None and pattern != old_str:
+            raise ValueError("pattern and old_str cannot differ when both are provided")
+        chosen = pattern if pattern is not None else old_str
+        if chosen is None:
+            raise ValueError("Each edit requires pattern (or old_str for compatibility)")
+        return chosen
 
-def _edit_error(code: str, edit_index: int, message: str, dry_run: bool) -> dict:
+    def replacement_text(self) -> str:
+        replacement = getattr(self, "replacement", None)
+        new_str = getattr(self, "new_str", None)
+        if replacement is not None and new_str is not None and replacement != new_str:
+            raise ValueError("replacement and new_str cannot differ when both are provided")
+        chosen = replacement if replacement is not None else new_str
+        if chosen is None:
+            raise ValueError("Each edit requires replacement (or new_str for compatibility)")
+        return chosen
+
+
+def _edit_error(code: str, edit_index: int, message: str, dry_run: bool, hint: str | None = None) -> dict:
     # Raised during staging, before any write, so nothing needs rolling back.
-    return {
+    payload = {
         "error_code": code,
         "edit_index": edit_index,
         "message": f"[edit {edit_index}] {message}",
         "edits": [],
         "dry_run": dry_run,
     }
+    if hint:
+        payload["hint"] = hint
+    return payload
 
 
 def _expand(match: re.Match, template: str, expand_groups: bool) -> str:
@@ -37,7 +64,7 @@ def _expand(match: re.Match, template: str, expand_groups: bool) -> str:
 def apply_edits(
     edits: Annotated[
         list[Edit],
-        Field(min_length=1, description="Ordered edits to apply to workspace files. Each edit is an object with keys: path (workspace-relative file), old_str (regex pattern), new_str (literal replacement text), and optional position (object with 1-based keys line and col that limit the search start). Edits are staged in order; later edits run against earlier staged changes, including repeated edits to the same file."),
+        Field(min_length=1, description="Ordered edits to apply to workspace files. Each edit is an object with keys: path (workspace-relative file), pattern/replacement (preferred names), old_str/new_str (legacy aliases), and optional position (object with 1-based keys line and col that limit the search start). Edits are staged in order; later edits run against earlier staged changes, including repeated edits to the same file."),
     ],
     replace_all: Annotated[
         bool,
@@ -49,7 +76,7 @@ def apply_edits(
     ] = False,
     expand_groups: Annotated[
         bool,
-        Field(description="If true, new_str is a Python re replacement template: \\1 and \\g<name> insert capture groups and backslash escapes are interpreted. Defaults to false (new_str is literal)."),
+        Field(description="If true, replacement/new_str is a Python re replacement template: \\1 and \\g<name> insert capture groups and backslash escapes are interpreted. Defaults to false (replacement text is literal)."),
     ] = False,
 ) -> dict:
     # Phase 1: Validate and stage all edits in memory
@@ -83,14 +110,22 @@ def apply_edits(
             staged_contents[resolved_key] = disk_text
 
         before = staged_contents[resolved_key]
-        pattern = edit.old_str
-        if pattern is None:
-            raise ValueError(f"[edit {edit_index}] Each edit requires old_str as a Python regular expression")
+        try:
+            pattern = edit.regex_pattern()
+            replacement_text = edit.replacement_text()
+        except ValueError as exc:
+            return _edit_error("invalid_edit", edit_index, str(exc), dry_run)
 
         try:
             rx = re.compile(pattern)
         except re.error as exc:
-            return _edit_error("invalid_regex", edit_index, f"Invalid regular expression in old_str: {exc}", dry_run)
+            return _edit_error(
+                "invalid_regex",
+                edit_index,
+                f"Invalid regular expression in pattern/old_str: {exc}",
+                dry_run,
+                hint="Use Python re syntax. For literal text, escape regex metacharacters such as . * + ? ( ) [ ] { } |.",
+            )
 
         pos = edit.position
         match_count = 0
@@ -99,30 +134,66 @@ def apply_edits(
             offset = sum(map(len, lines[:max(0, int(pos.line) - 1)])) + max(0, int(pos.col) - 1)
             match = rx.search(before[offset:])
             if not match:
-                return _edit_error("no_match", edit_index, f"Pattern did not match in {name}", dry_run)
+                return _edit_error(
+                    "no_match",
+                    edit_index,
+                    f"Pattern did not match in {name}",
+                    dry_run,
+                    hint="Check the pattern against current staged content, or use replace_all=true if multiple matches are expected.",
+                )
             a, b = offset + match.start(), offset + match.end()
             try:
-                new_text = _expand(match, edit.new_str, expand_groups)
+                new_text = _expand(match, replacement_text, expand_groups)
             except re.error as exc:
-                return _edit_error("invalid_replacement", edit_index, f"Invalid replacement in new_str: {exc}", dry_run)
+                return _edit_error(
+                    "invalid_replacement",
+                    edit_index,
+                    f"Invalid replacement in replacement/new_str: {exc}",
+                    dry_run,
+                    hint="When expand_groups=true, ensure referenced groups exist (e.g. \\1 or \\g<name>).",
+                )
             after = before[:a] + new_text + before[b:]
             match_count = 1
         else:
             if replace_all:
                 try:
-                    after, match_count = rx.subn(lambda m: _expand(m, edit.new_str, expand_groups), before, count=0)
+                    after, match_count = rx.subn(lambda m: _expand(m, replacement_text, expand_groups), before, count=0)
                 except re.error as exc:
-                    return _edit_error("invalid_replacement", edit_index, f"Invalid replacement in new_str: {exc}", dry_run)
+                    return _edit_error(
+                        "invalid_replacement",
+                        edit_index,
+                        f"Invalid replacement in replacement/new_str: {exc}",
+                        dry_run,
+                        hint="When expand_groups=true, ensure referenced groups exist (e.g. \\1 or \\g<name>).",
+                    )
                 if match_count == 0:
-                    return _edit_error("no_match", edit_index, f"Pattern did not match in {name}", dry_run)
+                    return _edit_error(
+                        "no_match",
+                        edit_index,
+                        f"Pattern did not match in {name}",
+                        dry_run,
+                        hint="Check the pattern against current staged content, or use replace_all=true if multiple matches are expected.",
+                    )
             else:
                 match = rx.search(before)
                 if not match:
-                    return _edit_error("no_match", edit_index, f"Pattern did not match in {name}", dry_run)
+                    return _edit_error(
+                        "no_match",
+                        edit_index,
+                        f"Pattern did not match in {name}",
+                        dry_run,
+                        hint="Check the pattern against current staged content, or use replace_all=true if multiple matches are expected.",
+                    )
                 try:
-                    new_text = _expand(match, edit.new_str, expand_groups)
+                    new_text = _expand(match, replacement_text, expand_groups)
                 except re.error as exc:
-                    return _edit_error("invalid_replacement", edit_index, f"Invalid replacement in new_str: {exc}", dry_run)
+                    return _edit_error(
+                        "invalid_replacement",
+                        edit_index,
+                        f"Invalid replacement in replacement/new_str: {exc}",
+                        dry_run,
+                        hint="When expand_groups=true, ensure referenced groups exist (e.g. \\1 or \\g<name>).",
+                    )
                 after = before[:match.start()] + new_text + before[match.end():]
                 match_count = 1
 
@@ -164,9 +235,10 @@ def register(mcp):
         "Apply regex edits to workspace files; replace_all defaults to false; dry_run=true validates without writing. "
         "Validates and stages the entire batch before writing; a later invalid edit leaves earlier edits unapplied. "
         "Edits are processed in order against staged content, so repeated/overlapping edits on the same file are order-sensitive. "
-        "old_str is a Python regular expression pattern (re module); new_str is literal replacement text unless expand_groups=true (Python re template: \\1, \\g<name>; a bad reference returns error_code='invalid_replacement'). "
+        "pattern/replacement are the preferred parameter names; old_str/new_str are supported as legacy aliases. "
+        "pattern is a Python regular expression (re module); replacement text is literal unless expand_groups=true (Python re template: \\1, \\g<name>; a bad reference returns error_code='invalid_replacement'). "
         "Error messages include the zero-based edit index ([edit N]) for easy identification. "
-        "Edit failures return error_code (invalid_regex, invalid_replacement, no_match, not_found, path_escape, not_a_file, binary_file, io_error) "
+        "Edit failures return error_code (invalid_regex, invalid_replacement, no_match, not_found, path_escape, not_a_file, binary_file, io_error, invalid_edit) "
         "with edit_index and message instead of raising; nothing is written. "
         "Each result entry includes matches (count of replacements made) and a unified diff. "
         "Returns unified diffs. When to use: Make localized changes."

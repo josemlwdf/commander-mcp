@@ -3,6 +3,7 @@
 This project ships optional tools that depend on local configuration, extra Python packages, or external services.
 
 Use `get_capabilities` first to confirm what is configured and currently available.
+For optional tools, each `tools.<name>` entry may include `missing_requirements` and `setup_docs` to speed troubleshooting.
 
 ## LSP (`lsp_symbol_lookup`)
 
@@ -149,4 +150,6 @@ After configuration, call `get_capabilities` and verify expected flags under:
 
 - `tools.*.available`
 - `tools.*.configured` (where applicable)
+- `tools.*.missing_requirements` (empty for fully configured optional tools)
+- `tools.*.setup_docs` (for quick setup references)
 - `env.*`

@@ -285,6 +285,7 @@ def git_manage(
             "supported": False,
             "error_code": "git_unavailable",
             "message": "Git is not installed or is unavailable on PATH.",
+            "hint": "Install Git and confirm `git --version` works in this environment.",
             "exit_code": 127,
         }
 
@@ -303,6 +304,7 @@ def git_manage(
                 "supported": True,
                 "error_code": "repository_discovery_incomplete",
                 "message": "Cannot initialize because repository discovery could not scan the whole workspace.",
+                "hint": "Retry after narrowing --root or fixing unreadable directories, then run git_manage status.",
                 "exit_code": 1,
             }
         if _REPOSITORIES:
@@ -346,6 +348,7 @@ def git_manage(
                 "supported": True,
                 "error_code": "repository_discovery_incomplete",
                 "message": "Cannot select a Git repository because workspace discovery was incomplete.",
+                "hint": "Fix unreadable workspace paths or provide repo_path explicitly if known.",
                 "exit_code": 1,
             }
         if len(_REPOSITORIES) > 1:
@@ -362,6 +365,7 @@ def git_manage(
             "supported": False,
             "error_code": "git_unavailable",
             "message": "Git could not be started.",
+            "hint": "Check PATH and permissions, then run `git --version` in the same shell.",
             "exit_code": check["exit_code"],
         }
     if check["exit_code"] != 0 or check["stdout"].strip() != "true":
@@ -370,12 +374,14 @@ def git_manage(
                 "supported": True,
                 "error_code": "not_a_git_repository",
                 "message": "The selected workspace path is not inside a Git repository.",
+                "hint": "Run git_manage action='status' at the repository root, or use action='init' if this workspace should be initialized.",
                 "exit_code": check["exit_code"] or 128,
             }
         return {
             "supported": True,
             "error_code": "git_repository_check_failed",
             "message": "Could not verify that the selected workspace path is a Git repository.",
+            "hint": "Run git_manage action='status' and inspect stderr for Git diagnostics.",
             "exit_code": check["exit_code"] or 1,
         }
     if action == "checkout":
@@ -397,6 +403,7 @@ def git_manage(
                         f"'{ref}' is not a branch, tag, or commit. checkout only switches refs; "
                         "restoring file contents is not supported because it discards uncommitted edits."
                     ),
+                    "hint": "Check available refs with git_manage action='log' args=['--oneline','-n','20'].",
                     "exit_code": 1,
                 }
         # '--' forces git to treat the argument as a ref, never as a file path.

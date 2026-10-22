@@ -109,6 +109,8 @@ def browser_action(
                     "supported": False,
                     "error_code": "browser_launch_failed",
                     "message": f"Chromium could not be launched ({detail}). Run 'playwright install chromium' and try again.",
+                    "hint": "Install Chromium for Playwright in the same Python environment used by the server.",
+                    "next_step": "See docs/SETUP.md#browser-automation-browser_action for setup instructions.",
                 }
             if page is None:
                 return {
@@ -116,6 +118,8 @@ def browser_action(
                     "error_code": "dependency_missing",
                     "package": "playwright",
                     "message": "Install the optional playwright package and Chromium browser to enable browser automation.",
+                    "hint": "Run: python -m pip install playwright && python -m playwright install chromium",
+                    "next_step": "See docs/SETUP.md#browser-automation-browser_action for setup instructions.",
                 }
             if action == "navigate":
                 response = page.goto(url, wait_until="domcontentloaded", timeout=15000)

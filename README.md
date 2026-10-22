@@ -105,7 +105,7 @@ The check initializes the server, lists registered tool names, and calls `read_f
 
 Use workspace-relative paths, which resolve from the configured `--root`. Path operations are strictly validated against that root before any filesystem access occurs. Read and edit responses retain their existing `path` field and include `resolved_path`. `read_files` returns `total_lines`, `applied_start`, and `applied_end` alongside the content.
 
-`apply_edits` validates and stages the entire batch of edits in memory before writing any changes to disk. If any edit in the batch contains an invalid regular expression, fails to match, or encounters a filesystem write failure, all changes are rolled back so no partial edits remain applied. The `old_str` parameter is a Python regular expression pattern used to locate text, while `new_str` is treated as literal replacement text (escape sequences and backreferences are not interpreted unless `expand_groups=true`).
+`apply_edits` validates and stages the entire batch of edits in memory before writing any changes to disk. If any edit in the batch contains an invalid regular expression, fails to match, or encounters a filesystem write failure, all changes are rolled back so no partial edits remain applied. Prefer `pattern`/`replacement` parameter names; `old_str`/`new_str` remain supported as legacy aliases. Matching always uses Python regex (`re` module). Replacement text is literal by default (escape sequences and backreferences are not interpreted unless `expand_groups=true`).
 
 If your client also exposes a separate `multi_edit` helper, use this quick guide:
 
@@ -119,7 +119,7 @@ If your client also exposes a separate `multi_edit` helper, use this quick guide
 - Entire edit batches are validated and staged before write; failures leave files unchanged.
 - Edits are processed in input order against staged content; repeated or overlapping edits on the same file are order-sensitive.
 - `replace_all=false` replaces the first match per edit; `replace_all=true` replaces all matches.
-- `new_str` is literal unless `expand_groups=true`, where `\\1` and `\\g<name>` are expanded.
+- `replacement`/`new_str` is literal unless `expand_groups=true`, where `\\1` and `\\g<name>` are expanded.
 - Errors are structured (`error_code`, `edit_index`, message) and include a unified diff for successful staged edits.
 
 `apply_edits` failure-mode matrix:
@@ -130,8 +130,9 @@ If your client also exposes a separate `multi_edit` helper, use this quick guide
 | Path escapes workspace root | `path_escape` | Batch stops; no files are written. |
 | Target is not a UTF-8 text file | `binary_file` | Batch stops; no files are written. |
 | Duplicate/overlapping edits where a later pattern no longer matches staged text | `no_match` | Batch stops at the failing edit; earlier staged changes are discarded (atomic rollback). |
-| Invalid regex in `old_str` | `invalid_regex` | Batch stops; no files are written. |
+| Invalid regex in `pattern`/`old_str` | `invalid_regex` | Batch stops; no files are written. |
 | Invalid group reference/template with `expand_groups=true` | `invalid_replacement` | Batch stops; no files are written. |
+| Invalid edit shape (missing/contradictory aliases) | `invalid_edit` | Batch stops; no files are written. |
 | Filesystem access/write failure | `io_error` (staging) or raised write failure with rollback | Any writes already performed are reverted to original content. |
 
 `find_files` and `code_search_ripgrep` (deprecated; prefer `search_text`) return successful partial results when a workspace directory cannot be scanned. Their `errors` arrays identify skipped workspace-relative paths and explain the filesystem error. `find_files` and repository discovery enforce time limits (15 seconds) and entry limits (5,000 directories/results), excluding common generated directories by default (`node_modules`, `__pycache__`, `.venv`, `dist`, `build`, etc.), and set `incomplete: true` if limits are hit. `code_search_ripgrep` returns a structured `{"error_code": "invalid_regex", ...}` if given an invalid regular expression, and supports optional `context_lines` returning `context_before` and `context_after`.

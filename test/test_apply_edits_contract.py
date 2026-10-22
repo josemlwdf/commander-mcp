@@ -80,6 +80,36 @@ class ApplyEditsContractTests(unittest.TestCase):
 
         self.assertEqual(target.read_text(encoding="utf-8"), "\\3-\\2-\\1\n")
 
+    def test_pattern_and_replacement_aliases_work(self):
+        target = self.root / "alias.txt"
+        target.write_text("hello world\n", encoding="utf-8")
+
+        result = apply_edits.apply_edits(
+            [apply_edits.Edit(path="alias.txt", pattern="hello", replacement="hi")]
+        )
+
+        self.assertNotIn("error_code", result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "hi world\n")
+
+    def test_conflicting_alias_values_return_invalid_edit(self):
+        target = self.root / "conflict.txt"
+        target.write_text("hello\n", encoding="utf-8")
+
+        result = apply_edits.apply_edits(
+            [
+                apply_edits.Edit(
+                    path="conflict.txt",
+                    old_str="hello",
+                    pattern="world",
+                    new_str="x",
+                )
+            ]
+        )
+
+        self.assertEqual(result.get("error_code"), "invalid_edit")
+        self.assertEqual(result.get("edit_index"), 0)
+        self.assertEqual(target.read_text(encoding="utf-8"), "hello\n")
+
 
 if __name__ == "__main__":
     unittest.main()
