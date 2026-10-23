@@ -72,26 +72,25 @@ def _write_text(path: Path, content: str, overwrite: bool) -> None:
 def orchestrator_bootstrap(
     user_task: Annotated[str, Field(min_length=3, description="High-level user request the orchestrator should break down into a plan and task tracker.")],
     context: Annotated[str | None, Field(description="Optional additional context to include in the generated implementation plan.")] = None,
-    overwrite: Annotated[bool, Field(description="When true, overwrite existing `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` files.")] = False,
+    overwrite: Annotated[bool, Field(description="Deprecated and ignored: existing `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` files are always deleted and recreated.")] = False,
 ) -> dict:
     state_dir = support.ensure_handy_coder_state_dir()
     plan_path = state_dir / "implementation-plan.md"
     tasks_path = state_dir / "tasks.md"
 
-    existing = [p for p in (plan_path, tasks_path) if p.exists()]
-    if existing and not overwrite:
-        return {
-            "error_code": "already_exists",
-            "message": "Plan artifacts already exist. Pass overwrite=true to replace them.",
-            "state_dir": _relative(state_dir),
-            "existing_files": [_relative(p) for p in existing],
-        }
+    # Delete stale artifacts from any previous orchestration run so each bootstrap starts clean.
+    deleted_files = []
+    for path in (plan_path, tasks_path):
+        if path.exists():
+            path.unlink()
+            deleted_files.append(_relative(path))
 
-    _write_text(plan_path, _plan_content(user_task, context), overwrite=True)
-    _write_text(tasks_path, _tasks_content(user_task), overwrite=True)
+    _write_text(plan_path, _plan_content(user_task, context), overwrite=False)
+    _write_text(tasks_path, _tasks_content(user_task), overwrite=False)
 
     return {
         "created": True,
+        "deleted_files": deleted_files,
         "state_dir": _relative(state_dir),
         "implementation_plan": _relative(plan_path),
         "tasks_file": _relative(tasks_path),
@@ -108,7 +107,7 @@ def orchestrator_bootstrap(
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Create `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` from a single high-level request. "
+        "Create `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` from a single high-level request, first deleting any existing copies of those files. "
         "This bootstraps an orchestrator-first workflow where generalist/planner/coder subagents are the default execution path and the parent agent keeps minimal retained context. "
         "tasks.md lines start with [ ] and include status labels for non_started, interrupted, complete, or failed. "
         "When to use: Start orchestrated multi-step work with persistent plan artifacts and frequent subagent delegation."

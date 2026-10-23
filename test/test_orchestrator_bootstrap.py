@@ -37,17 +37,41 @@ class OrchestratorBootstrapTests(unittest.TestCase):
             self.assertIn("- [ ]", tasks_text)
             self.assertIn("status: non_started", tasks_text)
 
-    def test_bootstrap_returns_already_exists_without_overwrite(self):
+    def test_bootstrap_deletes_old_artifacts_and_recreates_them(self):
         with tempfile.TemporaryDirectory() as tmp:
             support.configure(tmp)
             first = orchestrator_bootstrap.orchestrator_bootstrap(user_task="Initial task")
             self.assertTrue(first["created"])
+            self.assertEqual(first["deleted_files"], [])
+
+            plan_path = Path(tmp) / first["implementation_plan"]
+            tasks_path = Path(tmp) / first["tasks_file"]
+            tasks_path.write_text("- [x] [status: complete] stale task\n", encoding="utf-8")
 
             again = orchestrator_bootstrap.orchestrator_bootstrap(user_task="Second task")
-            self.assertEqual(again["error_code"], "already_exists")
-            self.assertIn("existing_files", again)
+            self.assertTrue(again["created"])
+            self.assertNotIn("error_code", again)
+            self.assertEqual(
+                sorted(again["deleted_files"]),
+                [".handy-coder/implementation-plan.md", ".handy-coder/tasks.md"],
+            )
+            self.assertIn("Second task", plan_path.read_text(encoding="utf-8"))
+            tasks_text = tasks_path.read_text(encoding="utf-8")
+            self.assertNotIn("stale task", tasks_text)
+            self.assertIn("Second task", tasks_text)
 
-    def test_bootstrap_can_overwrite_existing_artifacts(self):
+    def test_bootstrap_deletes_only_the_orchestrator_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            support.configure(tmp)
+            first = orchestrator_bootstrap.orchestrator_bootstrap(user_task="Initial task")
+            state_dir = Path(tmp) / first["state_dir"]
+            other = state_dir / "notes.md"
+            other.write_text("keep me", encoding="utf-8")
+
+            orchestrator_bootstrap.orchestrator_bootstrap(user_task="Second task")
+            self.assertTrue(other.exists())
+
+    def test_bootstrap_overwrite_flag_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             support.configure(tmp)
             orchestrator_bootstrap.orchestrator_bootstrap(user_task="Initial task")

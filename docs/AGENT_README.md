@@ -184,7 +184,7 @@ Use subagents for broad searches, independent reviews, and large-input summaries
 
 ### Orchestrator bootstrap
 
-`orchestrator_bootstrap` creates `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` from a single high-level request. The generated tasks file uses `[ ]` placeholders with explicit status labels (`non_started`, `interrupted`, `complete`, `failed`) so an orchestrator can track progress while repeatedly spawning subagents.
+`orchestrator_bootstrap` creates `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` from a single high-level request, first deleting any existing copies of those two files (the `overwrite` argument is deprecated and ignored; the result lists removed paths in `deleted_files`). The generated tasks file uses `[ ]` placeholders with explicit status labels (`non_started`, `interrupted`, `complete`, `failed`) so an orchestrator can track progress while repeatedly spawning subagents.
 
 `orchestrator_update_task_status` atomically updates a single `[status: ...]` task line (selected by `line_number` or `task_contains`) without rewriting progress manually.
 

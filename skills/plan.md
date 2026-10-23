@@ -10,7 +10,7 @@ Use this skill when the user asks for an implementation plan or when the request
 
 ## Workflow
 
-1. Call `orchestrator_bootstrap` with the user's task and relevant context. It creates `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md`. If it reports existing files, read them first; preserve useful progress and only overwrite when replacement is clearly needed for the current task.
+1. Call `orchestrator_bootstrap` with the user's task and relevant context. It creates `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md`. It deletes any existing copies of those two files first, so if a previous plan or task list holds progress worth keeping, read it and save what you need before calling it.
 2. Start a `generalist` subagent to assess scope, assumptions, risks, and relevant project areas. Incorporate its findings into the implementation plan.
 3. Start a `planner` subagent with the task, generalist assessment, and relevant plan context. Ask it to produce small, actionable subtasks with clear completion criteria and dependencies.
 4. Review the breakdown. Keep tasks independent where possible: each should have a distinct outcome and bounded file ownership. Record prerequisites explicitly, avoid assigning concurrent edits to the same files, and combine tasks that cannot be safely separated. Replace the bootstrap placeholders in `tasks.md` with the reviewed tasks, preserving the `[ ] [status: non_started]` format.

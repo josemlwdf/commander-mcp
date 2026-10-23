@@ -62,7 +62,7 @@ Every incoming call goes through the supervisor hooks before its handler runs:
 - **`git_manage` with `status` or `log`:** Enriches Git output with parsed untracked-file summaries or structured recent commit metadata.
 - **`code_get_diagnostics`:** Inspects project configuration and selects the first configured/available check in its detection order. If an earlier configured binary is missing, it records that and tries the next candidate where possible.
 - **`run_tests` and build/check tools:** Start the selected local process with bounded execution and return structured output. The MCP does not automatically run these after every edit; the assistant must request them.
-- **`orchestrator_bootstrap`:** Creates `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` when explicitly called. Existing files cause an error unless `overwrite=true` is supplied.
+- **`orchestrator_bootstrap`:** Creates `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` when explicitly called. Any existing copies of those two files are deleted first, so each call starts from a clean slate; the `overwrite` argument is deprecated and ignored.
 - **`skills_manage` save:** Creates the configured skills directory if needed. Saving or deleting skills is explicit; neither happens automatically at startup.
 - **C# indexing:** Can also be refreshed explicitly with `index_codebase`; it is not automatically refreshed after each code edit in the described main flow.
 
