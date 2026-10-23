@@ -308,6 +308,16 @@ class LoadTests(Base):
 
 
 class ResolveTests(Base):
+    def test_resolve_all_models_from_first_usable_config(self):
+        write_config(
+            self.cdir,
+            'config.json',
+            {'models': [entry(name='first'), entry(name='second', model='m2')]},
+        )
+        resolved = cc.resolve_continue_models(self.ws, {}, self.home)
+        self.assertEqual([item.model.name for item in resolved], ['first', 'second'])
+        self.assertTrue(all(item.config_path == str(self.cdir / 'config.json') for item in resolved))
+
     def test_first_usable_wins_and_falls_through(self):
         bad = self.root / 'bad.json'
         bad.write_text('{oops')

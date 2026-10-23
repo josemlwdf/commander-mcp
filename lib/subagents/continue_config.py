@@ -385,3 +385,27 @@ def resolve_continue_model(
         if chosen is not None:
             return ResolvedContinue(model=chosen, config_path=str(path))
     return None
+
+
+def resolve_continue_models(
+    workspace_root: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+    accept: Callable[[ContinueModel], bool] | None = None,
+) -> list[ResolvedContinue]:
+    """Return usable models from the first Continue config containing any.
+
+    Returned model objects hold credentials and must stay inside the runtime;
+    callers should expose only ``safe_summary()``.
+    """
+    env = os.environ if environ is None else environ
+    for path, trusted in _candidates(workspace_root, env, home):
+        config = _load_cached(path)
+        if config is None:
+            continue
+        models = list_usable_models(config, path.parent, env, allow_secret_refs=trusted)
+        if accept is not None:
+            models = [model for model in models if accept(model)]
+        if models:
+            return [ResolvedContinue(model=model, config_path=str(path)) for model in models]
+    return []

@@ -10,7 +10,7 @@ from pydantic import Field
 from ..support import describe
 from . import loop
 from .manager import SubagentManager
-from .resolve import resolve_backend, resolve_continue
+from .resolve import resolve_backend, resolve_continue, resolve_continue_models
 from .roles import Role, get_role, role_names
 
 
@@ -71,13 +71,13 @@ def _wait_seconds() -> float:
         return 15.0
 
 
-def _loop_runner(task_id: str, role_obj: Role) -> None:
+def _loop_runner(task_id: str, role_obj: Role, selected_continue_model=None) -> None:
     secrets: list[str] = []
     try:
         task_obj = _MANAGER.start_task(task_id)
         continue_model = None
         if task_obj.backend.startswith("continue:"):
-            resolved = resolve_continue()
+            resolved = selected_continue_model or resolve_continue()
             if resolved is None:
                 raise RuntimeError("continue backend is no longer available")
             continue_model = resolved.model
@@ -105,9 +105,9 @@ def _loop_runner(task_id: str, role_obj: Role) -> None:
         _CANCEL_EVENTS.pop(task_id, None)
 
 
-def _launch_loop(task_id: str, role_obj: Role) -> None:
+def _launch_loop(task_id: str, role_obj: Role, continue_model=None) -> None:
     _CANCEL_EVENTS[task_id] = threading.Event()
-    thread = threading.Thread(target=_loop_runner, args=(task_id, role_obj), daemon=True, name=f"subagent-{task_id}")
+    thread = threading.Thread(target=_loop_runner, args=(task_id, role_obj, continue_model), daemon=True, name=f"subagent-{task_id}")
     _THREADS[task_id] = thread
     thread.start()
 
@@ -119,6 +119,7 @@ def _terminal_payload(task_id: str) -> dict:
             "status": "completed",
             "task_id": task_obj.task_id,
             "backend": task_obj.backend,
+            **({"model": dict(task_obj.model)} if task_obj.model else {}),
             "result": task_obj.result or "",
             "usage": {"turns": task_obj.turns_used, "tokens": task_obj.tokens_used},
         }
@@ -127,12 +128,14 @@ def _terminal_payload(task_id: str) -> dict:
             "status": "failed",
             "task_id": task_obj.task_id,
             "backend": task_obj.backend,
+            **({"model": dict(task_obj.model)} if task_obj.model else {}),
             "error": task_obj.error or f"task ended with state {task_obj.state}",
         }
     return {
         "status": "running",
         "task_id": task_obj.task_id,
         "backend": task_obj.backend,
+        **({"model": dict(task_obj.model)} if task_obj.model else {}),
         "poll": "subagent_status",
     }
 
@@ -142,9 +145,31 @@ def subagent_run(
     task: Annotated[str, Field(description="Task for the subagent to perform in isolation from the parent flow.")],
     context: Annotated[str | None, Field(description="Optional context to pass to the subagent, such as branch, files, or constraints.")] = None,
     deliverable: Annotated[str | None, Field(description="Optional explicit deliverable format for the subagent result.")] = None,
+    model: Annotated[str | None, Field(description="Optional Continue model name or model identifier. Available choices are listed by get_capabilities under subagents.continue.models. An explicit choice routes this task through that model's direct API provider.")] = None,
     wait: Annotated[bool, Field(description="When true (default), wait for completion when the backend can finish quickly. Without a usable backend the result is status unavailable; explicit cooperative mode delegates to the host.")] = True,
 ) -> dict:
-    selected_backend = _backend()
+    selected_continue_model = None
+    if model is not None:
+        choices = resolve_continue_models()
+        wanted = model.strip().lower()
+        named = [item for item in choices if item.model.name.lower() == wanted]
+        matches = named or [item for item in choices if item.model.model.lower() == wanted]
+        if not wanted or not matches:
+            available = ", ".join(item.model.name for item in choices) or "none"
+            raise ValueError(f"Unknown or unavailable Continue model '{model}'. Available model names: {available}.")
+        if len(matches) > 1:
+            raise ValueError(f"Continue model '{model}' is ambiguous; select its unique configured name.")
+        selected_continue_model = matches[0]
+
+    selected_backend = (
+        f"continue:{selected_continue_model.model.provider}"
+        if selected_continue_model is not None
+        else _backend()
+    )
+    if selected_continue_model is None and selected_backend.startswith("continue:"):
+        selected_continue_model = resolve_continue()
+        if selected_continue_model is not None:
+            selected_backend = f"continue:{selected_continue_model.model.provider}"
     role_obj = get_role(role)
     if role_obj is None:
         raise ValueError(f"Unknown role '{role}'. Available roles: {_available_roles_text()}")
@@ -163,7 +188,8 @@ def subagent_run(
             "message": f"Role '{role_obj.name}' can write files and loop backends are read-only unless SUBAGENT_LOOP_WRITE=1; do this step yourself in this conversation.",
         }
 
-    task_obj = _MANAGER.create_task(role, task, selected_backend, context, deliverable)
+    model_summary = selected_continue_model.model.safe_summary() if selected_continue_model else None
+    task_obj = _MANAGER.create_task(role, task, selected_backend, context, deliverable, model_summary)
 
     if selected_backend == "cooperative":
         frame = _MANAGER.make_frame(task_obj.task_id, role_obj, task)
@@ -172,11 +198,12 @@ def subagent_run(
             "status": "delegated_to_host",
             "task_id": task_obj.task_id,
             "backend": selected_backend,
+            **({"model": dict(task_obj.model)} if task_obj.model else {}),
             "instructions": _instructions(role, task, context, deliverable),
             "wait": bool(wait),
         }
 
-    _launch_loop(task_obj.task_id, role_obj)
+    _launch_loop(task_obj.task_id, role_obj, selected_continue_model)
     if wait:
         thread = _THREADS.get(task_obj.task_id)
         if thread is not None:
@@ -195,6 +222,7 @@ def subagent_status(
         "task_id": task_obj.task_id,
         "state": task_obj.state,
         "backend": task_obj.backend,
+        **({"model": dict(task_obj.model)} if task_obj.model else {}),
         "usage": {"turns": task_obj.turns_used, "tokens": task_obj.tokens_used},
     }
     if task_obj.error:
@@ -325,6 +353,7 @@ def register(mcp):
     base = (
         "Delegate multi-step work to an internal subagent contract with stable status shapes. "
         "A subagent runs only when a backend is available: client sampling, a provider key in the environment, or a model from the user's Continue config when SUBAGENT_CONTINUE=1. Without one, subagent_run returns status unavailable and creates no task. "
+        "subagent_run accepts an optional Continue model name or model identifier; explicit selection uses that model's direct API provider regardless of automatic backend precedence. get_capabilities lists safe model choices, and subagent responses/status include the chosen model summary when known. Report selected models when summarizing delegated work to the user. "
         "Loop backends run read-only roles; roles that can write (planner, coder, committer) need SUBAGENT_LOOP_WRITE=1. Use subagents for broad searches, independent reviews and summaries of large inputs when available. "
         "When status is completed, consume result; when running, poll subagent_status; "
         "when unavailable, do the work yourself in this conversation and do not retry; when delegated_to_host (explicit SUBAGENT_BACKEND=cooperative only, scoped role mode), follow instructions then call subagent_complete. Cooperative tasks expire after five minutes; successful git_manage commits by a committer close that frame automatically, while skipped or unsuccessful commits and other roles require subagent_complete. Streaming and checkpoint/resume are unsupported. Roles: generalist/explorer are read-only, reviewer adds diagnostics/tests, planner can also create/edit, coder can create/edit plus diagnostics/tests. Result pages include offset, total_length, and next_offset metadata. The commit nudge starts a committer subagent only when HANDY_CODER_COMMIT_SUBAGENT=1 (off by default). An open frame blocks tools outside its role allowlist; recover with subagent_complete or subagent_cancel(confirm=true)."

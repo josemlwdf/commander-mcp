@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 from .. import support
-from ..subagents.resolve import resolve_backend, resolve_continue
+from ..subagents.resolve import resolve_backend, resolve_continue, resolve_continue_models
 from ..support import describe
 from ..subagents.roles import ROLES
 
@@ -45,10 +45,17 @@ def get_capabilities() -> dict:
     subagent_backend = resolve_backend()
     # Only non-secret identifiers: provider, model name and config path. Never the key.
     continue_info = None
+    continue_models = resolve_continue_models()
     if subagent_backend.startswith('continue:'):
         resolved = resolve_continue()
         if resolved is not None:
             continue_info = {**resolved.model.safe_summary(), 'config_path': resolved.config_path}
+    if continue_models:
+        continue_info = {
+            **(continue_info or {}),
+            "models": [item.model.safe_summary() for item in continue_models],
+            "config_path": continue_models[0].config_path,
+        }
 
     tools: dict[str, dict] = {
         # Core tools — always available
@@ -84,7 +91,7 @@ def get_capabilities() -> dict:
             },
         },
         "web_fetch_docs": {"available": True, "note": "fetches public HTTP(S) text"},
-        "subagent_run": {"available": True, "backend": subagent_backend, "roles": {name: {"allowed_tools": list(role.allowed_tools), "max_tool_calls": role.max_tool_calls, "result_format": role.result_format} for name, role in ROLES.items()}, "note": "start subagent task"},
+        "subagent_run": {"available": True, "backend": subagent_backend, "roles": {name: {"allowed_tools": list(role.allowed_tools), "max_tool_calls": role.max_tool_calls, "result_format": role.result_format} for name, role in ROLES.items()}, "note": "start subagent task; optionally select a Continue model by name or model identifier"},
         "subagent_status": {"available": True, "backend": subagent_backend, "note": "poll task state"},
         "subagent_result": {"available": True, "backend": subagent_backend, "note": "fetch paged result"},
         "subagent_complete": {"available": True, "backend": subagent_backend, "note": "close delegated cooperative frame"},

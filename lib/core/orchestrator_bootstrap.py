@@ -34,9 +34,11 @@ def _plan_content(user_task: str, context: str | None) -> str:
         "- [ ] Spawn `subagent_run(role=\"planner\", ...)` using this plan as context to produce non-interfering tasks.\n"
         "- [ ] Write planner output into `.handy-coder/tasks.md` with `[ ]` before each task item.\n"
         "- [ ] Execute tasks one-by-one by spawning `coder` subagents for implementation details.\n"
+        "- [ ] Record the model returned by each `subagent_run` and include it when summarizing delegated work to the user.\n"
         "- [ ] Track task outcomes (`non_started`, `interrupted`, `complete`, `failed`) in `tasks.md`.\n\n"
         "## Orchestrator Memory Policy\n\n"
         "- Keep only minimal coordination context in the parent thread (current task, status, blockers).\n"
+        "- Choose a suitable Continue model for each delegated task from `get_capabilities` (`subagents.continue.models`) when multiple choices are available; report the selected model to the user.\n"
         "- Delegate substantial analysis or implementation to subagents instead of solving inline.\n"
         "- Prefer another subagent run whenever work spans multiple files or requires more than one reasoning step, but only while subagent_run is available. If subagent_run returns status 'unavailable' (no subagent LLM configured), do not retry: do the step yourself in this conversation and record the outcome in tasks.md.\n\n"
         "## Generalist Assessment\n\n"
@@ -100,6 +102,7 @@ def orchestrator_bootstrap(
             "Run subagent_run with role='planner' to produce independent actionable tasks.",
             "Replace bootstrap tasks in tasks.md with planner output while keeping [ ] placeholders.",
             "Execute each task via coder subagents and update status labels.",
+            "Choose from available Continue models when useful and report each selected model in the user-facing summary.",
             "Keep the parent thread lightweight: orchestrate, summarize, and spawn more subagents when work expands.",
             "If subagent_run returns status 'unavailable' (no subagent LLM configured), do not retry: do each step yourself in this conversation and still update tasks.md.",
         ],

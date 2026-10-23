@@ -185,6 +185,8 @@ Role tool access is scoped: `generalist`/`explorer` stay read-only, `reviewer` a
 
 Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, a model from your Continue config (on by default; `SUBAGENT_CONTINUE=0` turns it off), local Ollama when `SUBAGENT_LOCAL=1`, then no backend (`subagent_run` returns `unavailable`).
 
+`get_capabilities` lists supported Continue models under `subagents.continue.models` using only safe identifiers (`name`, `provider`, `model`). Pass a model's name or model identifier to the optional `model` argument on `subagent_run` to route that task through its direct API provider, regardless of automatic backend precedence. Task responses, status, and result metadata include the selected model summary when known; orchestrators should report it when summarizing delegated work. Without an explicit choice, existing automatic resolution applies.
+
 Loop-capable backends (`sampling`, `direct:*`, `local:ollama`, `continue:<provider>`) run an internal JSON-action loop and can return `completed` directly from `subagent_run` when `wait: true` and the run finishes quickly; otherwise they return `running` and should be polled with `subagent_status`. The loop accepts JSON actions, text-wrapped Continue `<function_calls>` tool calls, and plain-text final answers. Wrapped tool calls are executed in order up to the role's tool-call budget; extra calls in that response are skipped and the model is asked to return its final answer.
 
 Optional overrides:

@@ -16,6 +16,7 @@ class Task:
     task_id: str
     role: str
     backend: str
+    model: dict[str, str] | None
     task: str
     deliverable: str | None
     context: str | None
@@ -77,7 +78,7 @@ class SubagentManager:
                 task.error = "cooperative frame expired before subagent_complete"
                 task.updated_at = now
 
-    def create_task(self, role: str, task_text: str, backend: str, context: str | None, deliverable: str | None) -> Task:
+    def create_task(self, role: str, task_text: str, backend: str, context: str | None, deliverable: str | None, model: dict[str, str] | None = None) -> Task:
         with self._lock:
             self._sweep_locked()
             if len(self._tasks) >= self.limits.tasks_per_session:
@@ -90,6 +91,7 @@ class SubagentManager:
                 task_id=self._next_id(),
                 role=role,
                 backend=backend,
+                model=model,
                 task=task_text,
                 deliverable=deliverable,
                 context=context,
@@ -177,6 +179,7 @@ class SubagentManager:
             return {
                 "task_id": task_id,
                 "backend": task.backend,
+                **({"model": dict(task.model)} if task.model else {}),
                 "state": task.state,
                 "offset": offset,
                 "result": page,

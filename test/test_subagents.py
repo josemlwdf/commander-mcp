@@ -8,6 +8,7 @@ from lib.subagents import tools as subagent_tools
 from lib.subagents import loop as subagent_loop
 from lib.subagents.manager import SubagentLimits, SubagentManager
 from lib.subagents.resolve import resolve_backend
+from lib.subagents.continue_config import ContinueModel, ResolvedContinue
 from lib.subagents.roles import get_role
 
 
@@ -174,6 +175,42 @@ class SubagentToolTests(unittest.TestCase):
         self.assertEqual(out["backend"], "direct:openai")
         self.assertIn("finding", out["result"])
         self.assertEqual(out["usage"]["turns"], 1)
+
+    def test_explicit_continue_model_overrides_backend_and_is_reported(self):
+        selected = ResolvedContinue(
+            ContinueModel("fast", "openai", "gpt-fast", None, api_key="secret"),
+            "/private/config.yaml",
+        )
+        subagent_tools._BACKEND = "sampling"
+        captured = {}
+
+        def run_loop(backend, _role, _task, _context, _deliverable, **kwargs):
+            captured["backend"] = backend
+            captured["model"] = kwargs["continue_model"]
+            return "- finding: quick result", 1, 42
+
+        with patch.object(subagent_tools, "resolve_continue_models", return_value=[selected]):
+            with patch.object(subagent_loop, "run_loop", side_effect=run_loop):
+                out = self.mcp.tools["subagent_run"](
+                    role="explorer", task="inspect quickly", model="fast", wait=True
+                )
+
+        expected = {"name": "fast", "provider": "openai", "model": "gpt-fast"}
+        self.assertEqual(captured["backend"], "continue:openai")
+        self.assertIs(captured["model"], selected.model)
+        self.assertEqual(out["model"], expected)
+        self.assertNotIn("secret", str(out))
+        status = self.mcp.tools["subagent_status"](task_id=out["task_id"])
+        result = self.mcp.tools["subagent_result"](task_id=out["task_id"])
+        self.assertEqual(status["model"], expected)
+        self.assertEqual(result["model"], expected)
+
+    def test_unknown_explicit_continue_model_is_rejected(self):
+        with patch.object(subagent_tools, "resolve_continue_models", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "Unknown or unavailable Continue model"):
+                self.mcp.tools["subagent_run"](
+                    role="explorer", task="inspect", model="missing"
+                )
 
     def test_direct_backend_can_return_running(self):
         subagent_tools.configure_runtime(client_capabilities=None)

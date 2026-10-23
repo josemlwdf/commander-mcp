@@ -51,6 +51,21 @@ def resolve_continue():
         return None
 
 
+def resolve_continue_models():
+    """Return safe-to-select Continue models, retaining credentials internally."""
+    try:
+        from .. import support
+        from . import continue_config
+        from .loop import continue_provider_supported
+
+        return continue_config.resolve_continue_models(
+            getattr(support, 'ROOT', None),
+            accept=lambda model: continue_provider_supported(model.provider),
+        )
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _continue_backend() -> str:
     resolved = resolve_continue()
     return f'continue:{resolved.model.provider}' if resolved else 'cooperative'
