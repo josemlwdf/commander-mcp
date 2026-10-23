@@ -31,6 +31,45 @@ Handy Coder MCP is a local coding-assistant server, not a graphical application.
 3. Keep the tool inventory synchronized with registered tools and label which capabilities depend on installed binaries, environment variables, or MCP client features.
 4. Consider a concise end-to-end setup walkthrough that includes connection verification with `get_capabilities`, a workspace read, and a simple check.
 
+## Automatic actions performed by the MCP
+
+This section separates actions the server performs as part of normal operation from actions that only happen when the assistant requests a particular tool or option.
+
+### Automatic during server startup
+
+- **Resolve the workspace root.** The server tries the supplied `--root`, environment/configured IDE working directory, then falls back to the server directory. It resolves the path and fails startup if the result is not a directory.
+- **Create workspace state.** Startup creates `.handy-coder/` under the selected workspace, even before the assistant requests orchestration or indexing.
+- **Log the active boundary.** The resolved root and shell are written to stderr. Home-directory or filesystem-root workspaces also produce a warning because scans may be large.
+- **Register and validate tools.** The server registers the tool modules, checks tool argument schemas for unsupported types, and terminates startup if the schema check fails.
+- **Index C# files.** The server runs the C# indexer once before accepting MCP calls. The local index is stored at `.handy-coder/code_index.sqlite3`; the indexer skips its configured excluded/generated directories. An indexing error currently terminates startup.
+- **Start the stdio server and worker supervisor.** Tool handlers are wrapped so most execute in bounded worker processes. A semaphore limits concurrent workers to eight; the default worker deadline is 30 seconds, with a longer deadline derived from the requested timeout for terminal/build tools. A small set of handlers runs in-process.
+
+### Automatic around tool calls
+
+Every incoming call goes through the supervisor hooks before its handler runs:
+
+- **Enforce an open subagent frame.** While a cooperative subagent frame is active, calls outside that role's allowed tool list are rejected. Nested subagent runs are rejected. The manager sweeps expired tasks/frames when task state is accessed; cooperative frames expire after five minutes.
+- **Apply commit-gate checks when configured.** The code supports `off`, `nudge`, and `gate` enforcement modes; the default configuration shown in code is `nudge`. In `gate` mode, a later `create_file` or `apply_edits` call may be blocked if prior uncommitted changes exceed configured limits. A successful check/commit, a deferral, and repeated gate rejections affect the gate state.
+- **Track checks and writes.** Successful test, diagnostics, and lint results are recorded as the latest check status for commit-nudge evaluation. Successful non-dry-run edits and file creates update in-memory write counts, changed paths, and approximate payload size. Failed writes and dry-run edits are excluded.
+- **Evaluate commit nudges after writes.** With the default `nudge` configuration, the server evaluates the workspace Git diff after successful writes. It can attach a nudge when configured thresholds, a green check, or a module switch is detected. A nudge automatically tries to start a `committer` subagent to inspect `.gitignore` and make a safe commit; it is instructed not to push and to leave unrelated changes untouched. The returned tool result carries the task ID/status. If the subagent backend is cooperative, the host receives a delegated task and must complete that subagent flow.
+- **Add subagent reminders/completion metadata.** Calls made in a delegated frame can receive a reminder to complete the frame. A successful commit by a `committer` closes its cooperative frame automatically; other roles, skipped commits, and unsuccessful commits require `subagent_complete` (or cancellation).
+
+### Automatic actions tied to a requested tool
+
+- **`create_file`:** Creates missing parent directories by default. It refuses to overwrite unless `overwrite=true`. HTML files always receive a structural syntax check after saving. Python processing or formatting only runs when its corresponding option is enabled; content formatting defaults off. Successful writes can trigger the commit-nudge hook described above.
+- **`git_manage` with `init`:** Initializes Git, creates `test/` and `tmp/`, and maintains `.gitignore` with required `.handy-coder/` and `tmp/` rules plus detected generated-directory rules.
+- **`git_manage` with `add`:** Updates `.gitignore` with those rules before staging the requested files. This means an add request can also modify `.gitignore`.
+- **`git_manage` with `status` or `log`:** Enriches Git output with parsed untracked-file summaries or structured recent commit metadata.
+- **`code_get_diagnostics`:** Inspects project configuration and selects the first configured/available check in its detection order. If an earlier configured binary is missing, it records that and tries the next candidate where possible.
+- **`run_tests` and build/check tools:** Start the selected local process with bounded execution and return structured output. The MCP does not automatically run these after every edit; the assistant must request them.
+- **`orchestrator_bootstrap`:** Creates `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` when explicitly called. Existing files cause an error unless `overwrite=true` is supplied.
+- **`skills_manage` save:** Creates the configured skills directory if needed. Saving or deleting skills is explicit; neither happens automatically at startup.
+- **C# indexing:** Can also be refreshed explicitly with `index_codebase`; it is not automatically refreshed after each code edit in the described main flow.
+
+### Actions that are not automatic
+
+The server does not automatically run tests or diagnostics after every edit, format files by default, commit or push after every write, invoke web tools, or create orchestration plans. Commit behavior is the exception described above: once the nudge policy triggers, it automatically starts a commit subagent, but that subagent's result may be a cooperative delegation for the host to execute. Push is explicitly excluded from the committer task.
+
 ## Evidence reviewed
 
 - `README.md` — installation, client setup, workspace scope, and known VS Code issue.
