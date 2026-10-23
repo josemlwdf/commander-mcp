@@ -70,14 +70,26 @@ class RepeatedWritesLeaveNoSubagentFrameTests(unittest.TestCase):
     def test_five_writes_in_a_row_leave_no_frame_and_html_check_runs(self):
         body = "\n".join(f"line {i}" for i in range(40)) + "\n"
         results = []
+        deferred = False
         for index in range(3):
-            results.append(_call(self.mcp, "create_file", {"path": f"f{index}.txt", "content": body}))
+            result = _call(self.mcp, "create_file", {"path": f"f{index}.txt", "content": body})
+            results.append(result)
+            if "commit_nudge" in result:
+                deferred_result = _call(
+                    self.mcp,
+                    "defer_commit",
+                    {"action": "defer", "reason": "finish this test batch", "calls": 5},
+                )
+                self.assertTrue(deferred_result["ok"])
+                deferred = True
         for index in range(2):
-            results.append(_call(self.mcp, "apply_edits", {
+            result = _call(self.mcp, "apply_edits", {
                 "edits": [{"path": f"f{index}.txt", "pattern": "line 1\\b", "replacement": "changed"}],
-            }))
+            })
+            results.append(result)
         for result in results:
             self.assertNotIn("error_code", result, result)
+        self.assertTrue(deferred, "expected a nudge and bounded defer")
         nudges = [r["commit_nudge"] for r in results if "commit_nudge" in r]
         self.assertTrue(nudges, "expected at least one commit nudge on the real call path")
         for nudge in nudges:
@@ -89,6 +101,48 @@ class RepeatedWritesLeaveNoSubagentFrameTests(unittest.TestCase):
         check = _call(self.mcp, "html_syntax_check", {"path": "page.html"})
         self.assertNotEqual(check.get("error_code"), "subagent_scope_violation", check)
         self.assertNotIn("error_code", check, check)
+
+    def test_commit_nudge_blocks_tools_until_commit_or_bounded_defer(self):
+        content = "\n".join(f"line {index}" for index in range(90)) + "\n"
+        nudge = _call(
+            self.mcp,
+            "create_file",
+            {"path": "nudge.txt", "content": content},
+        )
+        self.assertIn("commit_nudge", nudge)
+
+        for name, arguments in (
+            ("read_files", {"paths": ["nudge.txt"]}),
+            ("git_manage", {"action": "status"}),
+        ):
+            with self.subTest(tool=name):
+                blocked = _call(self.mcp, name, arguments)
+                self.assertEqual(blocked["error_code"], "commit_gate_blocked", blocked)
+                self.assertIn("successful commit", blocked["message"])
+
+        deferred = _call(
+            self.mcp,
+            "defer_commit",
+            {"action": "defer", "reason": "finish a small follow-up", "calls": 1},
+        )
+        self.assertTrue(deferred["ok"])
+        readable = _call(self.mcp, "read_files", {"paths": ["nudge.txt"]})
+        self.assertNotIn("error_code", readable, readable)
+
+        write = _call(
+            self.mcp,
+            "create_file",
+            {"path": "deferred.txt", "content": "one more bounded change\n"},
+        )
+        self.assertNotIn("error_code", write, write)
+        blocked_again = _call(self.mcp, "read_files", {"paths": ["nudge.txt"]})
+        self.assertEqual(blocked_again["error_code"], "commit_gate_blocked", blocked_again)
+        second_defer = _call(
+            self.mcp,
+            "defer_commit",
+            {"action": "defer", "reason": "try again", "calls": 1},
+        )
+        self.assertEqual(second_defer["error_code"], "defer_already_used", second_defer)
 
 
 class InvalidCallsAreStructuredTests(unittest.TestCase):

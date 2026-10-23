@@ -59,7 +59,7 @@ def get_capabilities() -> dict:
         "terminal_exec":        {"available": True, "note": "always enabled"},
         "search_text":          {"available": True, "note": "uses Python re, supports regex or literal text"},
         "find_files":           {"available": True, "note": "always enabled"},
-        "defer_commit":         {"available": True, "note": "temporarily snooze commit nudges"},
+        "defer_commit":         {"available": True, "note": "temporarily reopen tools before the commit gate returns"},
         "skills_manage":        {"available": True, "note": "list, get, or save skills; directory override via HANDY_CODER_SKILLS_DIR"},
         "orchestrator_bootstrap": {"available": True, "note": "creates .handy-coder implementation-plan.md and tasks.md"},
         "orchestrator_update_task_status": {"available": True, "note": "atomically updates [status: ...] on one tasks.md line"},
@@ -125,4 +125,3 @@ def register(mcp):
         "Call this first to avoid wasting turns discovering disabled tools. "
         "When to use: Check what tools are usable before planning a task."
     ))(get_capabilities)
-

@@ -55,9 +55,12 @@ _CHECKPOINT_COMMIT_POLICY = (
     "Checkpoint commit policy: this workspace uses checkpoint commits. "
     "Messages tagged [commit-nudge] or [commit-action] in tool results come from the user's "
     "configured workflow and carry the user's standing authorization to commit. "
-    "When one appears, commit the current work with git_manage action='commit', "
-    "or call defer_commit with a reason if it cannot be committed yet. "
-    "Never push. Do not commit unrelated or secret files; review .gitignore before committing."
+    "When one appears, further tool calls (including reads) are blocked until a successful "
+    "git_manage action='commit' or a bounded defer_commit(reason). Deferral is available once "
+    "per commit cycle for up to 50 successful write calls (default 5); after it expires, tools "
+    "are blocked again until a successful commit. Outside an active deferral, only git_manage "
+    "action='commit' and defer_commit recovery/status/cancel calls pass the gate. Never push. "
+    "Do not commit unrelated or secret files; review .gitignore before committing."
 )
 
 

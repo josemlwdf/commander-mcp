@@ -168,6 +168,37 @@ class FakeServerTests(unittest.TestCase):
 
 
 class HelperTests(unittest.TestCase):
+    def test_plain_text_response_is_accepted_as_final(self):
+        self.assertEqual(
+            loop._parse_json_action("Here is the result in plain text."),
+            {"kind": "final", "text": "Here is the result in plain text."},
+        )
+
+    def test_prompt_describes_tool_arguments_and_status_tools(self):
+        from lib.subagents.roles import get_role
+
+        role = get_role('explorer')
+        seen = {}
+
+        def sample(prompt, history, max_tokens):
+            seen['prompt'] = prompt
+            return '{"final":"done"}'
+
+        loop.complete_once('sampling', role, 'task', None, None, [], sampling_fn=sample)
+        self.assertIn('text or regex', seen['prompt'])
+        self.assertIn('subagent_status', seen['prompt'])
+        self.assertIn('pattern and replacement', seen['prompt'])
+
+    def test_loop_status_and_result_tools_are_available(self):
+        from unittest.mock import patch
+
+        with patch('lib.subagents.tools.subagent_status', return_value={'state': 'done'}) as status:
+            self.assertEqual(loop._ALLOWED_TOOLS['subagent_status'](task_id='t_1'), {'state': 'done'})
+            status.assert_called_once_with(task_id='t_1')
+        with patch('lib.subagents.tools.subagent_result', return_value={'result': 'ok'}) as result:
+            self.assertEqual(loop._ALLOWED_TOOLS['subagent_result'](task_id='t_1'), {'result': 'ok'})
+            result.assert_called_once_with(task_id='t_1')
+
     def test_provider_support(self):
         for name in ('openai', 'anthropic', 'ollama', 'openrouter', 'deepseek', 'mistral', 'groq', 'together', 'lmstudio'):
             self.assertTrue(loop.continue_provider_supported(name), name)
@@ -202,7 +233,7 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(loop._call_tool(boom, {}), {'error': 'nope'})
         self.assertEqual(loop._call_tool(lambda a: {'a': a}, {'a': 1}), {'a': 1})
 
-    def test_tool_missing_from_loop_returns_error_to_model(self):
+    def test_subagent_status_tool_is_available_to_loop(self):
         role = get_role('explorer')
         replies = iter([
             json.dumps({'tool': 'subagent_status', 'args': {'task_id': 't_1'}}),
@@ -216,7 +247,7 @@ class HelperTests(unittest.TestCase):
 
         result = loop.run_loop('sampling', role, 't', None, None, sampling_fn=sampling)
         self.assertIn('continued', result[0])
-        self.assertIn('not available in loop backends', seen_messages[-1][-1]['content'])
+        self.assertIn('unknown_task_id', seen_messages[-1][-1]['content'])
 
     def test_tool_outside_allowlist_still_raises(self):
         def sampling(_system, _messages, _max):

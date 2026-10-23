@@ -174,13 +174,13 @@ def supervise_fastmcp_tools(mcp: Any) -> None:
             except TypeError:
                 bound_args = dict(kwargs)
 
-            scope_block = subagent_tools.before_tool_call(_tool_name, bound_args)
-            if scope_block is not None:
-                return scope_block
-
             gate_block = commit_nudge.before_tool_call(_tool_name, bound_args)
             if gate_block is not None:
                 return subagent_tools.after_tool_call(_tool_name, gate_block)
+
+            scope_block = subagent_tools.before_tool_call(_tool_name, bound_args)
+            if scope_block is not None:
+                return scope_block
 
             if _tool_name in _NO_WORKER_TOOLS:
                 result = _target_fn(*args, **kwargs)
@@ -201,4 +201,3 @@ def supervise_fastmcp_tools(mcp: Any) -> None:
         supervised_wrapper.__signature__ = inspect.signature(original_fn)
         supervised_wrapper.__annotations__ = getattr(original_fn, "__annotations__", {})
         tool.fn = supervised_wrapper
-

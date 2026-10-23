@@ -16,6 +16,9 @@ class ServerInstructionsTests(unittest.TestCase):
                 self.assertIn("[commit-action]", text)
                 self.assertIn("git_manage", text)
                 self.assertIn("defer_commit", text)
+                self.assertIn("including reads", text)
+                self.assertIn("up to 50 successful write calls", text)
+                self.assertIn("blocked again until a successful commit", text)
                 self.assertIn("Never push", text)
 
     def test_no_instructions_when_enforcement_off(self):

@@ -16,7 +16,7 @@ Descriptions in the MCP tool list are brief. Call `get_tool_details` with a regi
 - `run_tests`
 - `build_project` — detects and builds Python, Node, or .NET projects with structured diagnostics.
 - `git_manage` — successful `init` creates `test/` and `tmp/` and maintains `.gitignore`; `add` updates `.gitignore` before staging.
-- `defer_commit`
+- `defer_commit` — reopens tools for a bounded number of successful write calls; available once per commit cycle.
 - `web_search` — searches the public web with DuckDuckGo Lite.
 - `index_codebase` — incrementally indexes workspace C# files in `.handy-coder/code_index.sqlite3`.
 - `code_navigator` — searches indexed symbols, returns current symbol source, or finds likely syntactic usages.

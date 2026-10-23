@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from ..core import apply_edits, code_search, create_file, diagnostics, find_files, read_files, run_tests
-from ..core import git_manage
+from ..core import commit_nudge, git_manage
 from .roles import Role
 
 if TYPE_CHECKING:
@@ -26,7 +26,32 @@ _ALLOWED_TOOLS: dict[str, ToolFn] = {
     "apply_edits": apply_edits.apply_edits,
     "code_get_diagnostics": diagnostics.code_get_diagnostics,
     "run_tests": run_tests.run_tests,
+    "defer_commit": commit_nudge.defer_commit,
     "git_manage": git_manage.git_manage,
+    # Resolve these lazily: tools imports loop during module initialization.
+    "subagent_status": lambda **args: _call_subagent_tool("subagent_status", args),
+    "subagent_result": lambda **args: _call_subagent_tool("subagent_result", args),
+}
+
+
+def _call_subagent_tool(name: str, args: dict[str, Any]) -> dict:
+    from . import tools
+
+    return getattr(tools, name)(**args)
+
+
+_TOOL_ARGUMENTS = {
+    "read_files": '{"paths": ["workspace-relative path"], "line_ranges"?: [{"path": "...", "start_line": 1, "end_line": 20}], "start_line"?: 1, "end_line"?: 20, "encoding"?: "utf-8", "include_metadata"?: false}',
+    "search_text": '{"query": "text or regex", "is_regex"?: true, "path_glob"?: "...", "max_results"?: 100, "context_lines"?: 0, "include_generated"?: false, "case_insensitive"?: false, "extensions"?: [".py"]}',
+    "find_files": '{"glob_pattern": "**/*.py", "exclude_pattern"?: "...", "include_generated"?: false, "file_type"?: ".py", "min_size"?: 0, "max_size"?: 10000, "sort_by"?: "path|size|modified", "include_metadata"?: false}',
+    "create_file": '{"path": "workspace-relative path", "content"?: "full file content", "overwrite"?: false, "create_parents"?: true, "permissions"?: 420, "backup"?: false, "format_content"?: false, "post_process_python"?: false}',
+    "apply_edits": '{"edits": [{"path": "...", "pattern": "Python regex", "replacement": "text", "position"?: {"line": 1, "col": 1}}], "replace_all"?: false, "max_replacements"?: 1, "case_insensitive"?: false, "dry_run"?: false, "expand_groups"?: false}',
+    "code_get_diagnostics": '{"path"?: "...", "check"?: "ruff", "timeout_ms"?: 30000}',
+    "run_tests": '{"test_framework"?: "jest|pytest|vitest", "filter_path"?: "test/test_file.py", "fail_fast"?: false, "parallel"?: 1, "coverage"?: false, "verbose"?: false}',
+    "defer_commit": '{"action"?: "defer|cancel|status", "reason"?: "why commit must wait", "calls"?: 5}',
+    "git_manage": '{"action": "status|diff|log|add|commit|push|pull|merge|rebase|checkout|branch|stash|blame|init", "args"?: ["..."], "repo_path"?: "...", "mode"?: "unstaged|staged|both", "file_paths"?: ["..."]}',
+    "subagent_status": '{"task_id": "t_1"}',
+    "subagent_result": '{"task_id": "t_1", "offset"?: 0}',
 }
 
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -60,7 +85,9 @@ def _parse_json_action(text: str) -> dict[str, Any]:
     except ValueError:
         match = _JSON_BLOCK.search(raw)
         if not match:
-            raise ValueError("model response was not valid JSON action")
+            # Some otherwise capable models ignore the JSON instruction when
+            # they have no action to take. Treat ordinary prose as the final.
+            return {"kind": "final", "text": raw}
         data = json.loads(match.group(1))
 
     if not isinstance(data, dict):
@@ -223,11 +250,14 @@ def complete_once(
             f"You are the '{role.name}' subagent.",
             role.system_prompt,
             f"Allowed tools: {', '.join(role.allowed_tools)}",
+            "Tool argument shapes (optional fields may be omitted):\n"
+            + "\n".join(f"{name}: {_TOOL_ARGUMENTS[name]}" for name in role.allowed_tools if name in _TOOL_ARGUMENTS),
             "Return only JSON with one of these shapes:",
             '{"tool": "<tool_name>", "args": { ... }}',
             '{"final": "<final result text>"}',
             f"Target result format: {role.result_format}",
             "Never call tools outside the allowlist.",
+            "For apply_edits, every edit uses pattern and replacement (not old_str/new_str).",
         ]
     )
     if not history:
@@ -306,14 +336,27 @@ LOOP_WRITE_TOOLS = ("create_file", "apply_edits", "git_manage")
 # circular), so write-capable roles are gated behind SUBAGENT_LOOP_WRITE=1.
 
 
-def _call_tool(fn: ToolFn, args: dict[str, Any], deadline: float = 60.0) -> dict:
+def _call_tool(
+    fn: ToolFn,
+    args: dict[str, Any],
+    deadline: float = 60.0,
+    *,
+    tool_name: str | None = None,
+) -> dict:
+    name = tool_name or fn.__name__
+    gate_block = commit_nudge.before_tool_call(name, args)
+    if gate_block is not None:
+        return gate_block
+
     box: dict[str, Any] = {}
 
     def target() -> None:
         try:
-            box["result"] = fn(**args)
+            result = fn(**args)
         except Exception as exc:  # noqa: BLE001
             box["result"] = {"error": str(exc)}
+        else:
+            box["result"] = commit_nudge.after_tool_call(name, args, result)
 
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
@@ -386,7 +429,7 @@ def run_loop(
         if tool_fn is None:
             tool_result: Any = {"error": "tool not available in loop backends"}
         else:
-            tool_result = _call_tool(tool_fn, action["args"])
+            tool_result = _call_tool(tool_fn, action["args"], tool_name=tool_name)
 
         history.append(
             {

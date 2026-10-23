@@ -2,9 +2,12 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from lib import support
 from lib.core import commit_nudge
+from lib.core import read_files
+from lib.subagents import loop as subagent_loop
 
 
 class CommitNudgeTests(unittest.TestCase):
@@ -119,7 +122,98 @@ class CommitNudgeTests(unittest.TestCase):
                 self.assertIn("120 lines", text)
                 self.assertIn("3 files", text)
                 self.assertIn("Review .gitignore", text)
+                self.assertIn("Further tool calls, including reads, are blocked", text)
+                self.assertIn("once per commit cycle", text)
                 self.assertNotIn("Please call", text)
+
+    def _trigger_nudge(self):
+        (self.root / "a.txt").write_text(
+            "\n".join(f"line {index}" for index in range(90)) + "\n",
+            encoding="utf-8",
+        )
+        result = commit_nudge.after_tool_call(
+            "apply_edits",
+            {"edits": [{"path": "a.txt"}]},
+            {"edits": [{"path": "a.txt", "diff": ""}], "dry_run": False},
+        )
+        self.assertIn("commit_nudge", result)
+
+    def test_nudge_blocks_every_non_recovery_tool_call(self):
+        self._trigger_nudge()
+
+        for tool_name, args in (
+            ("read_files", {"paths": ["a.txt"]}),
+            ("run_tests", {}),
+            ("git_manage", {"action": "status"}),
+        ):
+            with self.subTest(tool=tool_name):
+                blocked = commit_nudge.before_tool_call(tool_name, args)
+                self.assertEqual(blocked["error_code"], "commit_gate_blocked")
+                self.assertIn("successful", blocked["message"])
+                self.assertIn("defer_commit", blocked["message"])
+
+        self.assertIsNone(commit_nudge.before_tool_call("git_manage", {"action": "commit"}))
+        self.assertIsNone(commit_nudge.before_tool_call("defer_commit", {"action": "defer"}))
+
+    def test_deferral_reopens_tools_for_bounded_writes_then_blocks_again(self):
+        self._trigger_nudge()
+        deferred = subagent_loop._call_tool(
+            commit_nudge.defer_commit,
+            {"reason": "finish this small refactor", "calls": 2},
+            tool_name="defer_commit",
+        )
+        self.assertEqual(deferred["deferred_calls"], 2)
+        self.assertIsNone(commit_nudge.before_tool_call("read_files", {"paths": ["a.txt"]}))
+
+        for index in range(2):
+            commit_nudge.after_tool_call(
+                "create_file",
+                {"path": f"deferred-{index}.txt"},
+                {"created": True},
+            )
+
+        self.assertEqual(commit_nudge.STATE.defer_remaining_calls, 0)
+        blocked = commit_nudge.before_tool_call("read_files", {"paths": ["a.txt"]})
+        self.assertEqual(blocked["error_code"], "commit_gate_blocked")
+        repeated = commit_nudge.defer_commit(
+            reason="another attempt",
+            calls=2,
+        )
+        self.assertEqual(repeated["error_code"], "defer_already_used")
+
+    def test_failed_commit_keeps_gate_and_successful_commit_clears_it(self):
+        self._trigger_nudge()
+
+        commit_nudge.after_tool_call(
+            "git_manage",
+            {"action": "commit"},
+            {"exit_code": 1},
+        )
+        self.assertTrue(commit_nudge.STATE.commit_required)
+
+        commit_nudge.after_tool_call(
+            "git_manage",
+            {"action": "commit"},
+            {"exit_code": 0},
+        )
+        self.assertFalse(commit_nudge.STATE.commit_required)
+        self.assertIsNone(commit_nudge.before_tool_call("read_files", {"paths": ["a.txt"]}))
+
+    def test_loop_backend_uses_the_same_commit_gate(self):
+        self._trigger_nudge()
+        result = subagent_loop._call_tool(
+            read_files.read_files,
+            {"paths": ["a.txt"]},
+            tool_name="read_files",
+        )
+        self.assertEqual(result["error_code"], "commit_gate_blocked")
+
+    def test_enforcement_off_bypasses_an_active_commit_gate(self):
+        self._trigger_nudge()
+        with patch.object(commit_nudge.CONFIG, "enforcement", "off"):
+            self.assertIsNone(
+                commit_nudge.before_tool_call("read_files", {"paths": ["a.txt"]})
+            )
 
 
 if __name__ == "__main__":

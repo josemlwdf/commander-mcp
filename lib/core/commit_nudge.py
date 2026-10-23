@@ -72,6 +72,7 @@ class CommitTrackerState:
     pending_switch_from_module: str | None = None
     defer_remaining_calls: int = 0
     defer_used_in_cycle: bool = False
+    commit_required: bool = False
     gate_block_next_write: bool = False
     gate_rejections_in_row: int = 0
     gate_flagged_for_review: bool = False
@@ -296,6 +297,7 @@ def _reset_cycle(state: CommitTrackerState) -> None:
     state.pending_switch_from_module = None
     state.defer_remaining_calls = 0
     state.defer_used_in_cycle = False
+    state.commit_required = False
     state.gate_block_next_write = False
     state.gate_rejections_in_row = 0
     state.gate_flagged_for_review = False
@@ -332,6 +334,14 @@ def _record_touch(state: CommitTrackerState, touched_files: list[str]) -> None:
         state.modules_seen.add(module)
 
 
+def _gate_reminder() -> str:
+    return (
+        "Further tool calls, including reads, are blocked until a successful commit or bounded defer. "
+        "Deferral is available once per commit cycle for up to 50 successful write calls (default 5); "
+        "the gate blocks tools again when the allowance expires."
+    )
+
+
 def _format_nudge(level: NudgeLevel, reason: NudgeReason | None, metrics: DiffMetrics, state: CommitTrackerState) -> str:
     files_preview = ", ".join(metrics.changed_files[:8])
     if len(metrics.changed_files) > 8:
@@ -365,7 +375,27 @@ def _format_nudge(level: NudgeLevel, reason: NudgeReason | None, metrics: DiffMe
     if files_preview:
         body += f" Files: {files_preview}."
     body += " Review .gitignore and add any missing ignore rules before committing."
+    body += f" {_gate_reminder()}"
     return f"{prefix} {body}"
+
+
+def _is_commit_recovery_call(tool_name: str, args: dict[str, Any]) -> bool:
+    return tool_name == "defer_commit" or (
+        tool_name == "git_manage" and args.get("action") == "commit"
+    )
+
+
+def _commit_gate_error() -> dict:
+    return {
+        "error_code": "commit_gate_blocked",
+        "message": (
+            "Commit required before any further tool calls. This checkpoint nudge carries the "
+            "workspace's standing authorization to commit: use git_manage action='commit' "
+            "(never push), or call defer_commit with a reason if the changes are not ready. "
+            "Deferral is available once per commit cycle for up to 50 successful write calls "
+            "(default 5). After it expires, tools remain blocked until a successful commit."
+        ),
+    }
 
 
 def _append_nudge(result: Any, level: NudgeLevel, reason: NudgeReason | None, metrics: DiffMetrics, state: CommitTrackerState) -> Any:
@@ -381,7 +411,7 @@ def _append_nudge(result: Any, level: NudgeLevel, reason: NudgeReason | None, me
             raise _CommitterDisabled()
         task = subagent_run(
             role="committer",
-            task="Review the repository .gitignore and add missing ignore rules for generated artifacts when needed, then review and commit the current workspace changes when they form a safe, coherent checkpoint. Do not push. If unrelated changes are present, leave the worktree untouched and report that no commit was made.",
+            task="If the commit gate is active, first call defer_commit with a reason so you can inspect and stage the checkpoint changes. Review the repository .gitignore and add missing ignore rules for generated artifacts when needed, then review and commit the current workspace changes when they form a safe, coherent checkpoint. Do not push. If unrelated changes are present, leave the worktree untouched and report that no commit was made.",
             context=(
                 f"Commit nudge: {level} ({reason or 'threshold'}); {metrics.files} changed files, "
                 f"{metrics.lines} changed lines. Changed paths: {', '.join(metrics.changed_files)}"
@@ -396,7 +426,9 @@ def _append_nudge(result: Any, level: NudgeLevel, reason: NudgeReason | None, me
         status = task.get("status", "failed")
         message = (
             f"[commit-action] Commit subagent started (task {task_id}); no push requested. "
-            "Review .gitignore and add missing generated artifact rules when needed."
+            "Review .gitignore and add missing generated artifact rules when needed. "
+            "The committer must use the bounded defer before inspecting; "
+            f"{_gate_reminder()}"
         )
     except _CommitterDisabled:
         # Text-only nudge: no subagent task or frame is created.
@@ -406,7 +438,7 @@ def _append_nudge(result: Any, level: NudgeLevel, reason: NudgeReason | None, me
     except Exception as exc:  # noqa: BLE001
         task_id = None
         status = "failed"
-        message = f"[commit-action] Commit subagent could not start: {exc}"
+        message = f"[commit-action] Commit subagent could not start: {exc}. {_gate_reminder()}"
     out = dict(result)
     out["commit_nudge"] = {
         "level": level,
@@ -442,9 +474,18 @@ def _extract_status_from_check(tool_name: str, result: Any) -> Literal["none", "
 
 
 def before_tool_call(tool_name: str, args: dict[str, Any]) -> dict | None:
-    if CONFIG.enforcement != "gate" or not _is_write_tool(tool_name, args):
+    if CONFIG.enforcement == "off":
         return None
     with STATE_LOCK:
+        if STATE.commit_required:
+            _ensure_cycle_initialized(STATE)
+        if STATE.commit_required:
+            if _is_commit_recovery_call(tool_name, args) or STATE.defer_remaining_calls > 0:
+                return None
+            return _commit_gate_error()
+
+        if CONFIG.enforcement != "gate" or not _is_write_tool(tool_name, args):
+            return None
         _ensure_cycle_initialized(STATE)
         if _is_merge_or_rebase_in_progress():
             STATE.gate_block_next_write = False
@@ -523,13 +564,14 @@ def after_tool_call(tool_name: str, args: dict[str, Any], result: Any) -> Any:
         STATE.last_nudge_at_call = STATE.write_calls
         STATE.pending_switch_from_module = None
         STATE.last_check_status = "none"
+        STATE.commit_required = True
         return _append_nudge(result, level, reason, metrics, STATE)
 
 
 def defer_commit(
     action: Annotated[Literal["defer", "cancel", "status"], Field(description="defer starts a deferral, cancel clears it, status reports the current deferral.")] = "defer",
     reason: Annotated[str | None, Field(description="Why this work cannot be committed yet; required for defer.")] = None,
-    calls: Annotated[int, Field(ge=1, le=50, description="Number of write calls to snooze commit nudges (default 5).")]=5,
+    calls: Annotated[int, Field(ge=1, le=50, description="Number of successful write calls to allow before the commit gate returns (default 5).")]=5,
 ) -> dict:
     with STATE_LOCK:
         _ensure_cycle_initialized(STATE)
@@ -558,7 +600,7 @@ def defer_commit(
         return {
             "ok": True,
             "deferred_calls": STATE.defer_remaining_calls,
-            "message": f"Commit nudges deferred for {STATE.defer_remaining_calls} write call(s).",
+            "message": f"Commit gate deferred for {STATE.defer_remaining_calls} successful write call(s).",
             "entry": entry,
         }
 
@@ -566,8 +608,8 @@ def defer_commit(
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Temporarily defer commit nudges when work is mid-refactor and cannot be committed yet. "
-        "Actions: defer (default, reason required), cancel, or status. Deferral defaults to 5 write calls. "
+        "Temporarily reopen tools when checkpoint changes cannot be committed yet. "
+        "Actions: defer (default, reason required), cancel, or status. Deferral defaults to 5 successful write calls and is capped at 50. "
         "This can be used once per commit cycle and every deferral is logged."
     ))(defer_commit)
 
