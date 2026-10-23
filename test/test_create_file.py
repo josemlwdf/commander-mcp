@@ -38,7 +38,10 @@ class CreateFileTests(unittest.TestCase):
     def test_creates_parent_directories(self):
         result = create_file.create_file("pkg/sub/mod.py", "x = 1\n")
         self.assertTrue(result["created"])
-        self.assertEqual((self.root / "pkg/sub/mod.py").read_text(), "x = 1\n")
+        written = (self.root / "pkg/sub/mod.py").read_text()
+        self.assertEqual(written, "x = 1\n")
+        self.assertEqual(result["bytes"], len(written.encode("utf-8")))
+        self.assertEqual(result["lines"], len(written.splitlines()))
 
     def test_parent_missing_when_create_parents_false(self):
         result = create_file.create_file("nope/file.txt", "x", create_parents=False)
@@ -99,19 +102,15 @@ class CreateFileTests(unittest.TestCase):
         create_file.create_file("crlf.txt", "a\r\nb\r\n")
         self.assertEqual((self.root / "crlf.txt").read_bytes(), b"a\r\nb\r\n")
 
-    def test_html_write_creates_asset_folders_and_returns_check(self):
+    def test_html_write_preserves_content_checks_final_saved_content_and_creates_no_asset_folders(self):
         result = create_file.create_file("index.html", "<html><body><img src='x'></body></html>")
         saved = (self.root / "index.html").read_text(encoding="utf-8")
-        self.assertEqual(saved, "<html>\n <body>\n  <img src=\"x\"/>\n </body>\n</html>\n")
-        self.assertTrue(result["formatter"]["ok"])
-        self.assertTrue(result["formatter"]["changed"])
+        self.assertEqual(saved, "<html><body><img src='x'></body></html>")
         self.assertEqual(result["bytes"], len(saved.encode("utf-8")))
         self.assertTrue(result["syntax_check"]["ok"])
-        self.assertEqual([x["path"] for x in result["asset_folders"]], ["static/html", "static/js", "static/css"])
-        self.assertTrue(all((self.root / p).is_dir() for p in ("static/html", "static/js", "static/css")))
-        self.assertIn("JavaScript", result["guidance"])
+        self.assertFalse((self.root / "static").exists())
 
-    def test_html_overwrite_preserves_existing_asset_file(self):
+    def test_html_overwrite_does_not_create_root_asset_folder(self):
         (self.root / "static/html").mkdir(parents=True)
         (self.root / "static/html/keep.html").write_text("keep")
         (self.root / "page.htm").write_text("old")
@@ -119,13 +118,6 @@ class CreateFileTests(unittest.TestCase):
         self.assertTrue(result["overwritten"])
         self.assertTrue((self.root / "static/html/keep.html").exists())
         self.assertTrue(result["syntax_check"]["ok"])
-
-    def test_html_asset_folder_failure_is_reported_after_write(self):
-        (self.root / "static").write_text("block")
-        result = create_file.create_file("index.html", "<p>ok</p>")
-        self.assertTrue(result["created"])
-        self.assertTrue((self.root / "index.html").exists())
-        self.assertTrue(any(not item["created"] for item in result["asset_folders"]))
 
     def test_non_html_result_shape_unchanged(self):
         result = create_file.create_file("plain.txt", "ok")
@@ -138,7 +130,7 @@ class CreateFileTests(unittest.TestCase):
         with patch("lib.utils.html_prettify.prettify_html", return_value=("<p>x</p>", {
             "ok": False, "changed": False, "error": "formatter failed",
         })):
-            result = create_file.create_file("failure.html", "<p>x</p>")
+            result = create_file.create_file("failure.html", "<p>x</p>", format_content=True)
         self.assertEqual((self.root / "failure.html").read_text(encoding="utf-8"), "<p>x</p>")
         self.assertFalse(result["formatter"]["ok"])
 
@@ -151,6 +143,26 @@ class CreateFileTests(unittest.TestCase):
                 self.assertEqual(html_syntax_check.check_html(html)["ok"], expected)
         finding = html_syntax_check.check_html("<div>\n</span>")["findings"][0]
         self.assertEqual(finding["line"], 2)
+
+    def test_html_syntax_check_uses_final_saved_content_after_opt_in_formatter(self):
+        from unittest.mock import patch
+        submitted = "<div></div>"
+        with patch("lib.utils.html_prettify.prettify_html", return_value=("<div>", {"ok": True, "changed": True})):
+            result = create_file.create_file("broken.html", submitted, format_content=True)
+        self.assertFalse(result["syntax_check"]["ok"])
+        self.assertEqual((self.root / "broken.html").read_text(encoding="utf-8"), "<div>")
+        self.assertEqual(result["bytes"], len((self.root / "broken.html").read_bytes()))
+
+    def test_python_processing_and_formatting_are_opt_in(self):
+        from unittest.mock import patch
+        with patch("lib.utils.python_postprocess.process_python_file") as process, \
+             patch("lib.extras.code_format_lint.code_format_lint") as formatter:
+            create_file.create_file("plain.py", "x=1\n")
+            process.assert_not_called()
+            formatter.assert_not_called()
+            create_file.create_file("opt.py", "x=1\n", post_process_python=True, format_content=True)
+            process.assert_called_once()
+            formatter.assert_called_once()
 
 
 if __name__ == "__main__":
