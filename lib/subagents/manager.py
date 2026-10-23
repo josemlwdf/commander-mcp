@@ -44,6 +44,7 @@ class SubagentLimits:
     concurrent_tasks: int = 3
     tasks_per_session: int = 20
     task_ttl_seconds: int = 1200
+    frame_ttl_seconds: int = 300
     result_page_chars: int = 8000
 
 
@@ -194,7 +195,7 @@ class SubagentManager:
             parent_goal=parent_goal,
             tool_calls_left=role.max_tool_calls,
             opened_at=now,
-            expires_at=now + self.limits.task_ttl_seconds,
+            expires_at=now + self.limits.frame_ttl_seconds,
         )
 
     def consume_frame_tool_call(self, tool_name: str) -> tuple[bool, str | None]:

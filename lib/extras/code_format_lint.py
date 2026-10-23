@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import difflib
+import importlib.util
 import os
 import shutil
 from pathlib import Path
@@ -9,10 +10,12 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 from ..support import inside, run_process, describe
+from ..utils.python_postprocess import process_python_file
 
 
 PYTHON_SUFFIXES = {".py"}
 JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json", ".css", ".scss", ".md", ".html"}
+JS_FORMAT_SUFFIXES = {".js", ".mjs", ".cjs"}
 
 
 def _run(executable: str, args: list[str], cwd: Path) -> dict:
@@ -53,6 +56,55 @@ def _python_tool_path(name: str, root: Path) -> str | None:
     return shutil.which(name)
 
 
+def _jsbeautifier_module():
+    """Load the optional Python JavaScript formatter, if installed."""
+    try:
+        import jsbeautifier
+    except ImportError:
+        return None
+    return jsbeautifier
+
+
+def _javascript_files(paths: list[Path]) -> list[Path]:
+    """Return selected JavaScript files supported by jsbeautifier."""
+    files = []
+    for path in paths:
+        candidates = path.rglob("*") if path.is_dir() else (path,)
+        files.extend(candidate for candidate in candidates
+                     if candidate.is_file() and candidate.suffix.lower() in JS_FORMAT_SUFFIXES)
+    return sorted(set(files))
+
+
+def _format_javascript(paths: list[Path], fix: bool) -> dict:
+    formatter = _jsbeautifier_module()
+    if formatter is None:
+        return {"available": False, "report": None}
+
+    options = formatter.default_options()
+    options.indent_size = 2
+    reports = []
+    for path in _javascript_files(paths):
+        try:
+            before = path.read_text(encoding="utf-8")
+            after = formatter.beautify(before, options)
+            changed = before != after
+            if fix and changed:
+                path.write_text(after, encoding="utf-8")
+            reports.append({
+                "path": str(path),
+                "supported": True,
+                "exit_code": 0 if fix or not changed else 1,
+                "stdout": "Formatted." if fix and changed else ("Already formatted." if not changed else "Formatting needed."),
+                "stderr": "",
+                "changed": changed,
+            })
+        except (OSError, UnicodeError, ValueError) as exc:
+            reports.append({"path": str(path), "supported": True, "exit_code": 1,
+                            "stdout": "", "stderr": str(exc)})
+    return {"available": True, "report": {"tool": "jsbeautifier", "files": reports,
+             "exit_code": 0 if all(item["exit_code"] == 0 for item in reports) else 1}}
+
+
 def _skipped(tool: str, reason: str = "not_installed") -> dict:
     """Return a structured skipped-tool entry."""
     return {"tool": tool, "reason": reason}
@@ -82,13 +134,15 @@ def code_format_lint(
         Field(description="Apply available automatic fixes and formatting changes when true; otherwise run checks without writing changes."),
     ] = False,
     language: Annotated[
-        Literal["auto", "python", "javascript"],
+        Literal["auto", "python", "javascript", "text"],
         Field(description=(
             "File language selection. "
-            "auto: infer from extensions (.py → python; .js/.jsx/.ts/.tsx/etc. → javascript). "
+            "auto: infer supported languages from file extensions (.py → python; .js/.jsx/.ts/.tsx/etc. → javascript); "
             "python: run ruff and/or black. "
-            "javascript: run eslint and/or prettier (also covers TypeScript .ts/.tsx files). "
-            "Specify a language for directories or when auto cannot infer."
+            "javascript: run ESLint and jsbeautifier for .js/.mjs/.cjs files (also accepts TypeScript .ts/.tsx files for ESLint). "
+            "text: successful no-op; no tools or fixes are run. "
+            "Specify a language for directories or use language='auto' when a language cannot be inferred. "
+            "Python files receive automatic processing and formatting during creation; HTML files receive a syntax check."
         )),
     ] = "auto",
     config_file: Annotated[str | None, Field(description="Optional workspace-relative formatter/linter config file.")] = None,
@@ -100,8 +154,17 @@ def code_format_lint(
         resolved = [inside(path, must_exist=True) for path in paths]
         if any(not path.is_file() and not path.is_dir() for path in resolved):
             raise ValueError("Every path must refer to a file or directory")
-        if language not in ("auto", "python", "javascript"):
-            raise ValueError("language must be auto, python, or javascript")
+        if language not in ("auto", "python", "javascript", "text"):
+            raise ValueError("language must be auto, python, javascript, or text")
+        if language == "text":
+            return {
+                "supported": True,
+                "ok": True,
+                "language": "text",
+                "message": "Text selected; no formatting or fixes were run.",
+                "tools_run": [],
+                "tools_skipped": [],
+            }
         if language == "auto":
             suffixes = {path.suffix.lower() for path in resolved if path.is_file()}
             if suffixes and suffixes <= PYTHON_SUFFIXES:
@@ -132,11 +195,23 @@ def code_format_lint(
         originals: dict[str, str] = {}
         if fix:
             for p in resolved:
-                if p.is_file():
+                candidates = p.rglob("*") if p.is_dir() else (p,)
+                for candidate in candidates:
+                    if not candidate.is_file():
+                        continue
                     try:
-                        originals[str(p)] = p.read_text(encoding="utf-8")
+                        originals[str(candidate)] = candidate.read_bytes().decode("utf-8")
                     except OSError:
                         pass
+
+        processing = []
+        if fix and language == "python":
+            selected = [p for p in resolved if p.is_file() and p.suffix.lower() == ".py"]
+            for p in selected:
+                try:
+                    processing.append(process_python_file(p))
+                except (OSError, UnicodeError, SyntaxError) as exc:
+                    processing.append({"path": str(p), "ok": False, "error": str(exc), "changes": [], "uncertain": []})
 
         args = [str(path) for path in resolved]
         config_path = str(inside(config_file, must_exist=True)) if config_file else None
@@ -163,33 +238,42 @@ def code_format_lint(
                 reports.append({"tool": "black", **_run(black, command_args, root)})
             else:
                 tools_skipped.extend([_skipped("ruff"), _skipped("black")])
-                return {"supported": False, "message": "Install Ruff or Black locally to lint/format Python files.", "tools_run": tools_run, "tools_skipped": tools_skipped}
+                reports.append({"tool": "python-formatters", "supported": False,
+                                "message": "Install Ruff or Black locally to lint/format Python files."})
         else:
             available = False
             eslint = _tool_path("eslint", root)
-            prettier = _tool_path("prettier", root)
+            jsbeautifier_result = _format_javascript(resolved, fix)
             if eslint:
                 available = True
                 tools_run.append("eslint")
                 reports.append({"tool": "eslint", **_run(eslint, [*(["--fix"] if fix else []), *args], root)})
             else:
                 tools_skipped.append(_skipped("eslint"))
-            if prettier:
+            if jsbeautifier_result["available"]:
                 available = True
-                tools_run.append("prettier")
-                reports.append({"tool": "prettier", **_run(prettier, ["--write" if fix else "--check", *args], root)})
+                tools_run.append("jsbeautifier")
+                reports.append(jsbeautifier_result["report"])
             else:
-                tools_skipped.append(_skipped("prettier"))
+                tools_skipped.append(_skipped("jsbeautifier"))
             if not available:
-                return {"supported": False, "message": "Install ESLint or Prettier locally to lint/format JavaScript or TypeScript files.", "tools_run": tools_run, "tools_skipped": tools_skipped}
+                return {"supported": False, "message": "Install ESLint locally or install the 'javascript-format' extra for jsbeautifier.", "tools_run": tools_run, "tools_skipped": tools_skipped}
 
-        result: dict = {"supported": True, "fix": fix, "reports": reports, "tools_run": tools_run, "tools_skipped": tools_skipped}
+        formatter_available = not (language == "python" and not any(t in tools_run for t in ("ruff", "black")))
+        result: dict = {"supported": formatter_available, "fix": fix, "reports": reports, "tools_run": tools_run, "tools_skipped": tools_skipped}
+        if not formatter_available:
+            result["message"] = "Install Ruff or Black locally to lint/format Python files."
 
         # Compute top-level ok: true when all tools ran and all exited 0.
-        ok = bool(reports) and all(
+        ok = bool(tools_run) and all(
             r.get("exit_code") == 0 and "error_code" not in r
             for r in reports
+            if "exit_code" in r
         )
+        ok = ok and formatter_available
+        if processing:
+            result["processing"] = processing
+            ok = ok and all(item.get("ok", False) for item in processing)
         result["ok"] = ok
 
         # When fix=True, compute unified diffs for any files that changed.
@@ -198,7 +282,7 @@ def code_format_lint(
             for p in resolved:
                 if p.is_file() and str(p) in originals:
                     try:
-                        after = p.read_text(encoding="utf-8")
+                        after = p.read_bytes().decode("utf-8")
                     except OSError:
                         continue
                     before = originals[str(p)]
@@ -212,7 +296,8 @@ def code_format_lint(
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Lint or format Python and JavaScript/TypeScript with installed tools; fix=true applies changes. "
+        "Lint or format Python and JavaScript/TypeScript with installed tools; JavaScript formatting uses optional jsbeautifier for .js/.mjs/.cjs files; language=text is a successful no-op. "
+        "Python files receive automatic processing and formatting during creation; HTML files receive a syntax check. "
         "ok is true when all tools ran successfully (exit_code 0). "
         "tools_skipped entries include the tool name and the reason (e.g. not_installed). "
         "Report entries include error_code='tool_not_installed' when a tool binary cannot be started. "

@@ -231,9 +231,31 @@ def before_tool_call(tool_name: str, _: dict[str, Any]) -> dict | None:
     }
 
 
-def after_tool_call(tool_name: str, result: Any) -> Any:
+def after_tool_call(tool_name: str, result: Any, args: dict[str, Any] | None = None) -> Any:
     if tool_name.startswith("subagent_"):
         return result
+    frame = _MANAGER.open_frame()
+    if (
+        tool_name == "git_manage"
+        and isinstance(args, dict)
+        and args.get("action") == "commit"
+        and isinstance(result, dict)
+        and result.get("exit_code") == 0
+        and frame is not None
+        and frame.role.name == "committer"
+    ):
+        summary = "Commit completed successfully."
+        output = result.get("stdout")
+        if isinstance(output, str) and output.strip():
+            summary += " " + output.strip()
+        completed = _MANAGER.complete_task(frame.task_id, summary)
+        out = dict(result)
+        out["subagent_completion"] = {
+            "status": "completed",
+            "task_id": completed.task_id,
+            "summary": summary,
+        }
+        return out
     reminder = _MANAGER.reminder()
     if not reminder or not isinstance(result, dict):
         return result
@@ -251,7 +273,7 @@ def register(mcp):
         "Default to orchestration-first behavior: keep parent context minimal and delegate analysis, planning, implementation, and review to subagents whenever a task is not a single quick lookup. "
         "Use this especially for broad searches, independent reviews, summaries of large inputs, and any change touching multiple files or steps. "
         "When status is completed, consume result; when running, poll subagent_status; "
-        "when delegated_to_host, follow instructions then call subagent_complete. Cooperative completion is host-driven and must be explicitly completed; streaming and checkpoint/resume are unsupported. Roles: generalist/explorer are read-only, reviewer adds diagnostics/tests, planner can also create/edit, coder can create/edit plus diagnostics/tests. Result pages include offset, total_length, and next_offset metadata."
+        "when delegated_to_host, follow instructions then call subagent_complete. Cooperative tasks expire after five minutes; successful git_manage commits by a committer close that frame automatically, while skipped or unsuccessful commits and other roles require subagent_complete. Streaming and checkpoint/resume are unsupported. Roles: generalist/explorer are read-only, reviewer adds diagnostics/tests, planner can also create/edit, coder can create/edit plus diagnostics/tests. Result pages include offset, total_length, and next_offset metadata."
     )
     mcp.tool(description=describe(base + " Start a task."))(subagent_run)
     mcp.tool(description=describe(base + " Check task state and usage."))(subagent_status)

@@ -22,7 +22,7 @@ class OrchestratorBootstrapTests(unittest.TestCase):
             )
 
             self.assertTrue(result["created"])
-            self.assertEqual(result["state_dir"], ".handy_coder")
+            self.assertEqual(result["state_dir"], ".handy-coder")
 
             plan = Path(tmp) / result["implementation_plan"]
             tasks = Path(tmp) / result["tasks_file"]

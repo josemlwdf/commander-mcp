@@ -1,9 +1,11 @@
-import difflib, re
+import difflib
+import re
 from pathlib import Path
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 from ..support import inside, describe
+from ..utils.html_prettify import prettify_html
 
 
 class Position(BaseModel):
@@ -187,6 +189,27 @@ def apply_edits(
             "matches": match_count,
         })
 
+    # Prettify the final staged HTML once per file, after all regex edits.
+    files = []
+    for resolved_key, new_text in staged_contents.items():
+        path = Path(resolved_key)
+        if path.suffix.lower() not in {".html", ".htm"} or new_text == original_contents[resolved_key]:
+            continue
+        relative_path = path.relative_to(inside(".")).as_posix()
+        formatted, status = prettify_html(new_text)
+        if status["ok"]:
+            new_text = formatted
+            staged_contents[resolved_key] = formatted
+        original = original_contents[resolved_key]
+        files.append({
+            "path": relative_path,
+            "diff": "".join(difflib.unified_diff(
+                original.splitlines(True), new_text.splitlines(True),
+                fromfile=relative_path, tofile=relative_path,
+            )),
+            "formatter": status,
+        })
+
     # Phase 2: Write all staged changes to disk; roll back on failure.
     # Skipped entirely when dry_run=True.
     written: list[str] = []
@@ -204,7 +227,16 @@ def apply_edits(
                     pass
             raise RuntimeError(f"Write failed; all edits rolled back: {exc}") from exc
 
-    return {"edits": results, "dry_run": dry_run}
+    response = {"edits": results, "files": files, "dry_run": dry_run}
+    if not dry_run and any(
+        Path(path).suffix.lower() == ".py"
+        and new_text != original_contents[path]
+        for path, new_text in staged_contents.items()
+    ):
+        response["dependency_hint"] = (
+            "Review requirements.txt and add any new third-party dependencies introduced by these Python edits."
+        )
+    return response
 
 
 def register(mcp):
@@ -218,6 +250,6 @@ def register(mcp):
         "Error messages include the zero-based edit index ([edit N]) for easy identification. "
         "Edit failures return error_code (invalid_regex, invalid_replacement, no_match, not_found, path_escape, not_a_file, binary_file, io_error, invalid_edit) "
         "with edit_index and message instead of raising; nothing is written. "
-        "Each result entry includes matches (count of replacements made) and a unified diff. "
+        "Each edit result includes matches (count of replacements made) and its edit diff. Changed HTML files are prettified once after staging and are summarized in files with one original-to-final diff and formatter status per file; dry runs preview this without writing. Successful edits to Python files include a reminder to update requirements.txt if they introduce third-party dependencies. "
         "Returns unified diffs. When to use: Make localized changes."
     ))(apply_edits)

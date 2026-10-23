@@ -8,6 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from ..core import apply_edits, code_search, create_file, diagnostics, find_files, read_files, run_tests
+from ..core import git_manage
 from .roles import Role
 
 ToolFn = Callable[..., dict]
@@ -21,6 +22,7 @@ _ALLOWED_TOOLS: dict[str, ToolFn] = {
     "apply_edits": apply_edits.apply_edits,
     "code_get_diagnostics": diagnostics.code_get_diagnostics,
     "run_tests": run_tests.run_tests,
+    "git_manage": git_manage.git_manage,
 }
 
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)

@@ -18,7 +18,7 @@ async def check(args: argparse.Namespace) -> int:
     if args.arg is not None:
         server_args = args.arg
     elif args.command is None:
-        server_args = [str(Path(__file__).resolve().parents[1] / "handy_coder_mcp.py")]
+        server_args = [str(Path(__file__).resolve().parents[1] / "handy-coder_mcp.py")]
     else:
         server_args = []
     if args.root and "--root" not in server_args:
@@ -82,7 +82,7 @@ def main() -> int:
     parser.add_argument(
         "--arg",
         action="append",
-        help="One server argument; repeat for each argument. Defaults to handy_coder_mcp.py.",
+        help="One server argument; repeat for each argument. Defaults to handy-coder_mcp.py.",
     )
     parser.add_argument("--cwd", help="Server working directory")
     parser.add_argument("--root", help="Workspace root passed as --root unless already provided")

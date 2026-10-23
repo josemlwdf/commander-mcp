@@ -1,8 +1,10 @@
 """Lightweight health and capabilities endpoint for handy-coder-mcp."""
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
+from pathlib import Path
 
 from .. import support
 from ..subagents.resolve import resolve_backend
@@ -10,14 +12,32 @@ from ..support import describe
 from ..subagents.roles import ROLES
 
 
+def _workspace_tool_available(name: str, *, python: bool = False) -> bool:
+    """Check the same workspace-local tool locations used by code_format_lint."""
+    root = Path(support.ROOT)
+    if python:
+        venv_dirs = (root / ".venv" / "bin", root / "venv" / "bin")
+        if os.name == "nt":
+            venv_dirs += (root / ".venv" / "Scripts", root / "venv" / "Scripts")
+        for directory in venv_dirs:
+            executable = directory / name
+            if executable.is_file() or (os.name == "nt" and executable.with_suffix(".exe").is_file()):
+                return True
+    else:
+        executable = root / "node_modules" / ".bin" / name
+        if executable.is_file():
+            return True
+    return shutil.which(name) is not None
+
+
 def get_capabilities() -> dict:
     """Return the server's runtime capabilities and optional-dependency status."""
     # Core binaries
     git_ok = shutil.which("git") is not None
-    ruff_ok = shutil.which("ruff") is not None
-    black_ok = shutil.which("black") is not None
-    eslint_ok = shutil.which("eslint") is not None
-    prettier_ok = shutil.which("prettier") is not None
+    ruff_ok = _workspace_tool_available("ruff", python=True)
+    black_ok = _workspace_tool_available("black", python=True)
+    eslint_ok = _workspace_tool_available("eslint")
+    jsbeautifier_ok = importlib.util.find_spec("jsbeautifier") is not None
     pytest_ok = shutil.which("pytest") is not None
 
     subagent_backend = resolve_backend()
@@ -26,13 +46,14 @@ def get_capabilities() -> dict:
         # Core tools — always available
         "read_files":           {"available": True, "note": "always enabled"},
         "create_file":          {"available": True, "note": "always enabled"},
+        "html_syntax_check":    {"available": True, "note": "dependency-free HTML structural syntax checker"},
         "apply_edits":          {"available": True, "note": "always enabled"},
         "terminal_exec":        {"available": True, "note": "always enabled"},
         "search_text":          {"available": True, "note": "uses Python re, supports regex or literal text"},
         "find_files":           {"available": True, "note": "always enabled"},
         "defer_commit":         {"available": True, "note": "temporarily snooze commit nudges"},
-        "skills_manage":        {"available": True, "note": "list, get, or save skills; directory override via HANDY_CODER_SKILLS_DIR"},
-        "orchestrator_bootstrap": {"available": True, "note": "creates .handy_coder implementation-plan.md and tasks.md"},
+        "skills_manage":        {"available": True, "note": "list, get, or save skills; directory override via HANDY-CODER_SKILLS_DIR"},
+        "orchestrator_bootstrap": {"available": True, "note": "creates .handy-coder implementation-plan.md and tasks.md"},
         "orchestrator_update_task_status": {"available": True, "note": "atomically updates [status: ...] on one tasks.md line"},
         "run_tests":            {"available": pytest_ok, "note": "pytest binary" if not pytest_ok else "pytest found"},
         "git_manage":           {"available": git_ok, "note": "git binary" if not git_ok else "git found"},
@@ -44,10 +65,10 @@ def get_capabilities() -> dict:
         },
         # Extras
         "code_format_lint": {
-            "available": any([ruff_ok, black_ok, eslint_ok, prettier_ok]),
+            "available": any([ruff_ok, black_ok, eslint_ok, jsbeautifier_ok]),
             "tools": {
                 "ruff": ruff_ok, "black": black_ok,
-                "eslint": eslint_ok, "prettier": prettier_ok,
+                "eslint": eslint_ok, "jsbeautifier": jsbeautifier_ok,
             },
         },
         "web_fetch_docs": {"available": True, "note": "fetches public HTTP(S) text"},
@@ -73,7 +94,7 @@ def get_capabilities() -> dict:
 def register(mcp):
     return mcp.tool(description=describe(
         "Return server health and capability status: which tools are available, "
-        "which optional binaries (git, ruff, black, eslint, prettier, pytest) are installed, "
+        "which optional binaries and Python packages (git, ruff, black, eslint, jsbeautifier, pytest) are installed, "
         "and which optional environment-variable gated features are active. "
         "For optional integrations, tool entries include missing_requirements and setup_docs where applicable. "
         "Call this first to avoid wasting turns discovering disabled tools. "

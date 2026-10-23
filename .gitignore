@@ -3,4 +3,5 @@ __pycache__/
 *.py[cod]
 node_modules/
 dist/
-*.egg-info/
+tmp
+/.handy-coder/code_index.sqlite3

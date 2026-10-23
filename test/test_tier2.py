@@ -52,7 +52,7 @@ class Tier2ToolTests(unittest.TestCase):
         )
 
     def test_lsp_reports_unconfigured_backend(self):
-        with patch.dict(os.environ, {"HANDY_CODER_LSP_COMMAND": ""}):
+        with patch.dict(os.environ, {"HANDY-CODER_LSP_COMMAND": ""}):
             result = self.tools.tools["lsp_symbol_lookup"](
                 "main", "README.md", lsp_lookup.Position(line=0, character=0)
             )
@@ -87,7 +87,7 @@ while True:
         sys.stdout.buffer.flush()
 """
         command = shlex.join([sys.executable, "-c", server])
-        with patch.dict(os.environ, {"HANDY_CODER_LSP_COMMAND": command}):
+        with patch.dict(os.environ, {"HANDY-CODER_LSP_COMMAND": command}):
             result = self.tools.tools["lsp_symbol_lookup"](
                 "main", "README.md", lsp_lookup.Position(line=0, character=0)
             )
@@ -95,12 +95,12 @@ while True:
         self.assertEqual(result["definitions"], [])
 
     def test_semantic_search_reports_missing_model(self):
-        with patch.dict(os.environ, {"HANDY_CODER_EMBEDDING_MODEL": ""}):
+        with patch.dict(os.environ, {"HANDY-CODER_EMBEDDING_MODEL": ""}):
             result = self.tools.tools["vector_search_codebase"]("where is auth initialized?")
         self.assertFalse(result["supported"])
 
     def test_web_search_reports_unconfigured_provider(self):
-        with patch.dict(os.environ, {"HANDY_CODER_SEARCH_URL": ""}):
+        with patch.dict(os.environ, {"HANDY-CODER_SEARCH_URL": ""}):
             result = self.tools.tools["web_fetch_docs"](search_query="python docs")
         self.assertFalse(result["supported"])
 
@@ -119,14 +119,14 @@ while True:
         self.assertNotIn("secret", result["content"])
 
     def test_debugger_reports_missing_adapter(self):
-        with patch.dict(os.environ, {"HANDY_CODER_DAP_PORT": ""}):
+        with patch.dict(os.environ, {"HANDY-CODER_DAP_PORT": ""}):
             result = self.tools.tools["debug_session_step"]("start")
         self.assertFalse(result["supported"])
 
     def test_debugger_rejects_non_loopback_adapter(self):
         with patch.dict(os.environ, {
-            "HANDY_CODER_DAP_HOST": "192.168.1.10",
-            "HANDY_CODER_DAP_PORT": "5678",
+            "HANDY-CODER_DAP_HOST": "192.168.1.10",
+            "HANDY-CODER_DAP_PORT": "5678",
         }):
             with self.assertRaises(ValueError):
                 debugger._configured_endpoint()
@@ -174,9 +174,9 @@ while True:
         thread.start()
         tool = self.tools.tools["debug_session_step"]
         env = {
-            "HANDY_CODER_DAP_HOST": "127.0.0.1",
-            "HANDY_CODER_DAP_PORT": str(port),
-            "HANDY_CODER_DAP_START_REQUEST": '{"command":"launch","arguments":{}}',
+            "HANDY-CODER_DAP_HOST": "127.0.0.1",
+            "HANDY-CODER_DAP_PORT": str(port),
+            "HANDY-CODER_DAP_START_REQUEST": '{"command":"launch","arguments":{}}',
         }
         try:
             with patch.dict(os.environ, env):
@@ -197,6 +197,111 @@ while True:
             self.tools.tools["code_format_lint"]([])
         with self.assertRaises(ValueError):
             self.tools.tools["code_format_lint"](["/etc/passwd"])
+
+    def test_format_lint_text_is_noop_even_with_fix(self):
+        import tempfile as _tempfile
+        with _tempfile.TemporaryDirectory() as tmp:
+            from lib import support as _support
+            _support.configure(tmp)
+            try:
+                target = Path(tmp) / "notes.txt"
+                target.write_text("keep this text\n", encoding="utf-8")
+                with patch("lib.extras.code_format_lint.run_process") as run_process, \
+                     patch("lib.extras.code_format_lint.process_python_file") as process_python:
+                    result = self.tools.tools["code_format_lint"](
+                        ["notes.txt"], language="text", fix=True
+                    )
+                self.assertEqual(target.read_text(encoding="utf-8"), "keep this text\n")
+                run_process.assert_not_called()
+                process_python.assert_not_called()
+            finally:
+                _support.configure(str(Path(__file__).resolve().parents[1]))
+        self.assertTrue(result["supported"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["tools_run"], [])
+        self.assertEqual(result["tools_skipped"], [])
+
+    def test_format_lint_auto_infers_python_and_javascript(self):
+        pass_result = {"stdout": "", "stderr": "", "exit_code": 0,
+                       "timed_out": False, "duration_ms": 1}
+        with patch("lib.extras.code_format_lint.shutil.which", return_value="/usr/bin/tool"), \
+             patch("lib.extras.code_format_lint.run_process", return_value=pass_result):
+            py = self.tools.tools["code_format_lint"](["test/test_tier2.py"])
+            js = self.tools.tools["code_format_lint"](["README.md"])
+        self.assertIn("ruff", py["tools_run"])
+        self.assertIn("eslint", js["tools_run"])
+
+    def test_jsbeautifier_checks_javascript_with_two_space_indent(self):
+        import tempfile as _tempfile
+
+        class Options:
+            indent_size = 4
+
+        class Formatter:
+            @staticmethod
+            def default_options():
+                return Options()
+
+            @staticmethod
+            def beautify(source, options):
+                self.assertEqual(options.indent_size, 2)
+                return "function f() {\n  return 1;\n}\n"
+
+        with _tempfile.TemporaryDirectory() as tmp:
+            from lib import support as _support
+            _support.configure(tmp)
+            try:
+                (Path(tmp) / "script.js").write_text("function f(){return 1;}", encoding="utf-8")
+                (Path(tmp) / "clean.js").write_text("function f() {\n  return 1;\n}\n", encoding="utf-8")
+                with patch("lib.extras.code_format_lint._jsbeautifier_module", return_value=Formatter), \
+                     patch("lib.extras.code_format_lint._tool_path", return_value=None):
+                    result = self.tools.tools["code_format_lint"](["script.js"], language="javascript")
+                    clean = self.tools.tools["code_format_lint"](["clean.js"], language="javascript")
+            finally:
+                _support.configure(str(Path(__file__).resolve().parents[1]))
+        self.assertFalse(result["ok"])
+        report = next(item for item in result["reports"] if item["tool"] == "jsbeautifier")
+        self.assertEqual(report["exit_code"], 1)
+        clean_report = next(item for item in clean["reports"] if item["tool"] == "jsbeautifier")
+        self.assertEqual(clean_report["exit_code"], 0)
+
+    def test_jsbeautifier_fix_writes_file_and_returns_diff(self):
+        import tempfile as _tempfile
+
+        class Options:
+            indent_size = 4
+
+        class Formatter:
+            @staticmethod
+            def default_options():
+                return Options()
+
+            @staticmethod
+            def beautify(source, options):
+                return "const value = 1;\n"
+
+        with _tempfile.TemporaryDirectory() as tmp:
+            from lib import support as _support
+            _support.configure(tmp)
+            try:
+                target = Path(tmp) / "script.js"
+                target.write_text("const value=1", encoding="utf-8")
+                with patch("lib.extras.code_format_lint._jsbeautifier_module", return_value=Formatter), \
+                     patch("lib.extras.code_format_lint._tool_path", return_value=None):
+                    result = self.tools.tools["code_format_lint"](["script.js"], fix=True, language="javascript")
+                self.assertEqual(target.read_text(encoding="utf-8"), "const value = 1;\n")
+            finally:
+                _support.configure(str(Path(__file__).resolve().parents[1]))
+        self.assertTrue(result["ok"])
+        self.assertIn("script.js", result["diffs"])
+        self.assertIn("jsbeautifier", result["tools_run"])
+
+    def test_jsbeautifier_missing_is_reported_independently_of_eslint(self):
+        with patch("lib.extras.code_format_lint._jsbeautifier_module", return_value=None), \
+             patch("lib.extras.code_format_lint._tool_path", return_value=None):
+            result = self.tools.tools["code_format_lint"](["README.md"], language="javascript")
+        self.assertFalse(result["supported"])
+        self.assertIn({"tool": "jsbeautifier", "reason": "not_installed"}, result["tools_skipped"])
 
     def test_format_lint_reports_missing_local_tool(self):
         with patch("lib.extras.code_format_lint.shutil.which", return_value=None):
@@ -309,10 +414,10 @@ while True:
         self.assertNotIn("Python", msg)  # not a mixed-language error
 
     def test_lsp_config_check_runs_before_argument_validation(self):
-        """When HANDY_CODER_LSP_COMMAND is unset, supported:false is returned
+        """When HANDY-CODER_LSP_COMMAND is unset, supported:false is returned
         even before argument validation would run."""
         # README.md exists in the project root; position is valid.
-        with patch.dict(os.environ, {"HANDY_CODER_LSP_COMMAND": ""}):
+        with patch.dict(os.environ, {"HANDY-CODER_LSP_COMMAND": ""}):
             result = self.tools.tools["lsp_symbol_lookup"](
                 "main", "README.md", lsp_lookup.Position(line=0, character=0)
             )
@@ -320,9 +425,9 @@ while True:
         self.assertNotIn("error", result)
 
     def test_debugger_config_check_runs_before_cross_field_validation(self):
-        """When HANDY_CODER_DAP_PORT is unset, supported:false is returned
+        """When HANDY-CODER_DAP_PORT is unset, supported:false is returned
         even if breakpoint_file/line cross-field constraint would trigger."""
-        with patch.dict(os.environ, {"HANDY_CODER_DAP_PORT": ""}):
+        with patch.dict(os.environ, {"HANDY-CODER_DAP_PORT": ""}):
             # line without breakpoint_file would normally raise ValueError;
             # with no port configured we expect supported:false instead.
             result = self.tools.tools["debug_session_step"]("start", line=10)
@@ -477,21 +582,21 @@ while True:
         import sys
         from unittest.mock import MagicMock
 
-        with patch.dict(os.environ, {"HANDY_CODER_LSP_COMMAND": ""}):
+        with patch.dict(os.environ, {"HANDY-CODER_LSP_COMMAND": ""}):
             result = self.tools.tools["lsp_symbol_lookup"](
                 "main", "README.md", lsp_lookup.Position(line=0, character=0)
             )
-        self._assert_unavailable(result, "not_configured", env_var="HANDY_CODER_LSP_COMMAND")
+        self._assert_unavailable(result, "not_configured", env_var="HANDY-CODER_LSP_COMMAND")
 
-        with patch.dict(os.environ, {"HANDY_CODER_DAP_PORT": ""}):
+        with patch.dict(os.environ, {"HANDY-CODER_DAP_PORT": ""}):
             result = self.tools.tools["debug_session_step"]("start")
-        self._assert_unavailable(result, "not_configured", env_var="HANDY_CODER_DAP_PORT")
+        self._assert_unavailable(result, "not_configured", env_var="HANDY-CODER_DAP_PORT")
 
-        with patch.dict(os.environ, {"HANDY_CODER_EMBEDDING_MODEL": ""}):
+        with patch.dict(os.environ, {"HANDY-CODER_EMBEDDING_MODEL": ""}):
             result = self.tools.tools["vector_search_codebase"]("anything")
-        self._assert_unavailable(result, "not_configured", env_var="HANDY_CODER_EMBEDDING_MODEL")
+        self._assert_unavailable(result, "not_configured", env_var="HANDY-CODER_EMBEDDING_MODEL")
 
-        with patch.dict(os.environ, {"HANDY_CODER_EMBEDDING_MODEL": "some-model"}), \
+        with patch.dict(os.environ, {"HANDY-CODER_EMBEDDING_MODEL": "some-model"}), \
              patch.dict(sys.modules, {"sentence_transformers": None}):
             result = self.tools.tools["vector_search_codebase"]("anything")
         self._assert_unavailable(result, "dependency_missing", package="sentence-transformers")
@@ -533,6 +638,8 @@ while True:
         self.assertIn("read_files", caps["tools"])
         self.assertIn("apply_edits", caps["tools"])
         self.assertIn("terminal_exec", caps["tools"])
+        self.assertIn("jsbeautifier", caps["tools"]["code_format_lint"]["tools"])
+        self.assertNotIn("prettier", caps["tools"]["code_format_lint"]["tools"])
 
 
 if __name__ == "__main__":

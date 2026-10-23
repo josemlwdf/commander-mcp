@@ -2,6 +2,7 @@ import os
 import signal
 import socket
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -119,6 +120,27 @@ class WorkerSupervisorTests(unittest.TestCase):
         self.assertEqual(res.get("stdout").strip(), "hello")
         self.assertIn("timeout_reason", res)
         self.assertIsNone(res["timeout_reason"])
+
+    def test_supervised_apply_edits_forwards_expand_groups(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_root = support.ROOT
+            support.configure(temp_dir)
+            try:
+                target = Path(temp_dir) / "capture.txt"
+                target.write_text("cat\n", encoding="utf-8")
+                tool = MockTool(apply_edits.apply_edits, "apply_edits")
+                mcp = MockFastMCP([tool])
+                supervise_fastmcp_tools(mcp)
+
+                result = tool.fn(
+                    [apply_edits.Edit(path="capture.txt", pattern=r"(c)(at)", replacement=r"\2-\1")],
+                    expand_groups=True,
+                )
+
+                self.assertNotIn("error_code", result)
+                self.assertEqual(target.read_text(encoding="utf-8"), "at-c\n")
+            finally:
+                support.configure(str(previous_root))
 
     def test_terminal_exec_reports_timeout_reason(self):
         # Test terminal_exec process timeout
@@ -260,9 +282,9 @@ class WorkerSupervisorTests(unittest.TestCase):
         server_thread.start()
 
         env_patch = {
-            "HANDY_CODER_DAP_HOST": "127.0.0.1",
-            "HANDY_CODER_DAP_PORT": str(port),
-            "HANDY_CODER_DAP_START_REQUEST": '{"command": "launch", "arguments": {}}',
+            "HANDY-CODER_DAP_HOST": "127.0.0.1",
+            "HANDY-CODER_DAP_PORT": str(port),
+            "HANDY-CODER_DAP_START_REQUEST": '{"command": "launch", "arguments": {}}',
         }
 
         fake_mcp = MockFastMCP([])

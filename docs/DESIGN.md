@@ -93,7 +93,7 @@ The Python server registers local/configurable tools without requiring external 
 
 * **MCP Tool Name:** `code_format_lint`
 * **Input Schema:** `{ paths: string[], fix?: boolean }`
-* **Implementation:** Runs Prettier, ESLint, Ruff, or Black via shell call and returns lint errors or formatted diffs.
+* **Implementation:** Runs ESLint, Ruff, or Black via shell call and uses the optional Python jsbeautifier package for JavaScript formatting; returns lint errors or formatted diffs.
 
 ### 10. `web_fetch_docs`
 

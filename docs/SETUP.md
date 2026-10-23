@@ -1,11 +1,27 @@
 # Optional feature setup
 
-This project ships optional tools that depend on local configuration, extra Python packages, or external services. Only `code_format_lint` and `web_fetch_docs` are registered as optional tools by the main server. Other modules under `lib/extras` are not exposed unless explicitly registered.
+Install JavaScript formatting support with `pip install '.[javascript-format]'`. This provides jsbeautifier formatting for `.js`, `.mjs`, and `.cjs` files; ESLint remains independently optional.
+
+HTML files created or modified by `create_file` and `apply_edits` are automatically prettified with BeautifulSoup (`html.parser`). BeautifulSoup is installed as a required project dependency; formatter failures are reported while the requested file write is kept.
+
+The main server registers `code_format_lint` and `web_fetch_docs` from `lib/extras`, plus `web_search` and local C# navigation tools. Other modules under `lib/extras` are not exposed unless explicitly registered.
 
 Use `get_capabilities` first to confirm what is configured and currently available. Its `tools` section is the runtime source of truth for optional tool availability.
 For optional tools, each `tools.<name>` entry may include `missing_requirements` and `setup_docs` to speed troubleshooting.
 
 Tools blocked by missing packages, binaries, environment variables, or adapters return `status: "setup_required"` with `missing_requirements`, `remediation_commands`, and `documentation_url`. Tool-specific `error_code` values may be included for compatibility. Diagnostics and test execution responses include a `detection_trace` describing configured checks or the selected framework.
+
+## Local C# code navigation
+
+The server indexes C# source files during startup and stores the workspace-specific SQLite database at `.handy-coder/code_index.sqlite3`. It updates changed files and removes entries for deleted files; generated and tool-owned directories (including `.git`, `.handy-coder`, `Library`, `Temp`, `obj`, and `bin`) are excluded by default.
+
+The `index_codebase` and `code_navigator` tools use the Tree-sitter C# parser and SQLite FTS5, included in the project dependencies. No remote index, embedding service, or vector database is used. If parser or FTS5 initialization fails, server startup reports the error instead of running without the index.
+
+`code_navigator` supports `search_code`, `get_symbol`, and `find_references`. Search is lexical, not embedding-based; reference results are syntactic candidates and are not compiler-resolved. See [SEMANTIC_SEARCH.md](./SEMANTIC_SEARCH.md) for tool details.
+
+## Web tools
+
+`web_search` uses DuckDuckGo Lite, and `web_fetch_docs` retrieves a known public HTTP(S) URL. Both need network access when called; web fetch blocks private, local, and reserved addresses. Use `web_search` to discover public pages and `web_fetch_docs` to read a known URL.
 
 ## Web fetching (`web_fetch_docs`)
 

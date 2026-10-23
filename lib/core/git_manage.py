@@ -94,6 +94,35 @@ def _git_marker(directory: Path) -> bool:
     return stat.S_ISDIR(mode) or stat.S_ISREG(mode)
 
 
+def _maintain_gitignore(repository: Path) -> None:
+    """Add required and detected generated-directory rules without replacing user content."""
+    detected: set[str] = set()
+    for current, directories, _files in os.walk(repository, followlinks=False):
+        current_path = Path(current)
+        safe_directories = [
+            name for name in directories
+            if name != ".git" and not (current_path / name).is_symlink()
+        ]
+        detected.update(name for name in safe_directories if name in _DEFAULT_EXCLUDE_DIRS)
+        # Contents of an already ignored generated directory do not need scanning.
+        directories[:] = [name for name in safe_directories if name not in _DEFAULT_EXCLUDE_DIRS]
+
+    required = [".handy-coder/", "tmp/"]
+    rules = required + [f"{name}/" for name in sorted(detected) if f"{name}/" not in required]
+    ignore_path = repository / ".gitignore"
+    try:
+        existing = ignore_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing = ""
+
+    existing_rules = {line.strip() for line in existing.splitlines()}
+    additions = [rule for rule in rules if rule not in existing_rules]
+    if not additions:
+        return
+    separator = "" if not existing or existing.endswith(("\n", "\r")) else "\n"
+    ignore_path.write_text(existing + separator + "\n".join(additions) + "\n", encoding="utf-8")
+
+
 def _tool_description() -> str:
     if _REPOSITORIES is None:
         state = "Git repository discovery runs when this tool is first called."
@@ -124,7 +153,7 @@ def _tool_description() -> str:
             "they want a new repository initialized before calling git_manage with action='init'."
         )
     return describe(
-        "Run a validated workspace Git action: status, diff, log, add, commit, push, pull, merge, rebase, checkout, branch, stash, blame, or init. status returns structured staged/working-tree and untracked summaries; diff preserves raw text and accepts mode unstaged/staged/both plus repository-relative file_paths; log includes recent commit history. pull accepts an optional remote and branch; merge/rebase require one or more refs. These three actions require a clean worktree (including untracked files). "
+        "Run a validated workspace Git action: status, diff, log, add, commit, push, pull, merge, rebase, checkout, branch, stash, blame, or init. Successful init creates test/ and tmp/ and maintains the repository .gitignore; add updates .gitignore before staging. These updates preserve existing content, add .handy-coder/ and tmp/, and ignore generated directories from the common exclusion list when present. status returns structured staged/working-tree and untracked summaries; diff preserves raw text and accepts mode unstaged/staged/both plus repository-relative file_paths; log includes recent commit history. pull accepts an optional remote and branch; merge/rebase require one or more refs. These three actions require a clean worktree (including untracked files). "
         "Pass action-specific Git options as separate strings in args. "
         f"{state} Use workspace-relative repo_path when selecting a repository. "
         "When repo_path is given and has a .git marker, workspace scan is bypassed for faster execution. "
@@ -159,6 +188,10 @@ def _refresh_inventory(mcp=None, *, force: bool = False) -> None:
 def _update_tool_description(mcp, description: str) -> None:
     target_mcp = mcp or _MCP
     if target_mcp is None:
+        return
+    catalog_update = getattr(target_mcp, "_tool_details_update", None)
+    if callable(catalog_update):
+        catalog_update("git_manage", description)
         return
     descriptions = getattr(target_mcp, "descriptions", None)
     if isinstance(descriptions, dict) and "git_manage" in descriptions:
@@ -201,7 +234,7 @@ def git_manage(
         Field(description=(
             "Git operation to run. status and init take no args; diff accepts mode unstaged/staged/both and optional file_paths; diff and log accept "
             "validated options; add requires one or more workspace-relative paths (options are rejected); commit requires -m and a message; push accepts optional remote/refspec arguments with limited flags; branch lists/creates, stash accepts list/push/pop/apply/drop, blame requires one relative file; checkout requires "
-            "exactly one branch, tag, or commit (file paths are rejected with error_code not_a_ref); pull accepts up to remote and branch; merge/rebase require refs. pull, merge, and rebase require a clean worktree. init initializes the workspace root or a repo_path subdirectory."
+            "exactly one branch, tag, or commit (file paths are rejected with error_code not_a_ref); pull accepts up to remote and branch; merge/rebase require refs. pull, merge, and rebase require a clean worktree. init initializes the workspace root or a repo_path subdirectory, then creates test/ and tmp/ and maintains .gitignore. add maintains .gitignore before staging."
         )),
     ],
     args: Annotated[
@@ -330,6 +363,9 @@ def git_manage(
             raise ValueError("A Git repository is already available; init is only allowed when none are found")
         result = run_process([git, "init"], cwd=init_path)
         if result["exit_code"] == 0:
+            (init_path / "test").mkdir(exist_ok=True)
+            (init_path / "tmp").mkdir(exist_ok=True)
+            _maintain_gitignore(init_path)
             new_repositories, new_errors = discover_repositories()
             _set_inventory(new_repositories, new_errors)
             _update_tool_description(target_mcp, _tool_description())
@@ -474,6 +510,8 @@ def git_manage(
                 f"Git path does not exist: expected within '{selected_path}', resolved '{resolved}'."
             )
         git_args[index] = str(resolved)
+    if action == "add":
+        _maintain_gitignore(selected_path)
     if action == "diff":
         if mode == "both":
             staged = run_process([git, "diff", "--cached", *[arg for arg in git_args if arg != "--cached"]], cwd=selected_path)

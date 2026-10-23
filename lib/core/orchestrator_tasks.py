@@ -75,7 +75,7 @@ def orchestrator_update_task_status(
     status: Annotated[Status, Field(description="New task status. Allowed values: non_started, interrupted, complete, failed.")],
     line_number: Annotated[int | None, Field(ge=1, description="Optional 1-based tasks.md line number to update. Provide exactly one selector: line_number or task_contains.")] = None,
     task_contains: Annotated[str | None, Field(description="Optional text selector matched against tasks.md lines. Provide exactly one selector: task_contains or line_number.")] = None,
-    tasks_path: Annotated[str, Field(description="Workspace-relative path to the task tracker file. Defaults to .handy_coder/tasks.md.")] = ".handy_coder/tasks.md",
+    tasks_path: Annotated[str, Field(description="Workspace-relative path to the task tracker file. Defaults to .handy-coder/tasks.md.")] = ".handy-coder/tasks.md",
 ) -> dict:
     try:
         path = inside(tasks_path, must_exist=True)
@@ -140,7 +140,7 @@ def orchestrator_update_task_status(
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Update one task status in `.handy_coder/tasks.md` (or another tasks file) with an atomic write. "
+        "Update one task status in `.handy-coder/tasks.md` (or another tasks file) with an atomic write. "
         "Select the target by 1-based line_number or task_contains text, set status to non_started/interrupted/complete/failed, "
         "and keep the `[ ] [status: ...]` task format intact. "
         "When to use: Track orchestrator task progress safely between subagent runs."

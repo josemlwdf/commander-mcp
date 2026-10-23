@@ -193,7 +193,7 @@ def supervise_fastmcp_tools(mcp: Any) -> None:
                             pass
                 result = run_tool_in_worker(_target_fn, args, kwargs, deadline=deadline, mcp=mcp)
             result = commit_nudge.after_tool_call(_tool_name, bound_args, result)
-            return subagent_tools.after_tool_call(_tool_name, result)
+            return subagent_tools.after_tool_call(_tool_name, result, bound_args)
 
         supervised_wrapper.__signature__ = inspect.signature(original_fn)
         supervised_wrapper.__annotations__ = getattr(original_fn, "__annotations__", {})

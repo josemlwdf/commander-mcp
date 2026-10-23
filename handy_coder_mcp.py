@@ -34,10 +34,14 @@ def _load_fastmcp():
     return FastMCP
 
 from lib import support, worker_supervisor
+from lib import tool_details
 from lib.core import (
     read_files, create_file, apply_edits, terminal_exec, code_search, find_files,
     diagnostics, run_tests, git_manage, build_project, commit_nudge, system_info, skills, orchestrator_bootstrap, orchestrator_tasks,
 )
+from lib.core import code_navigator
+from lib.core import web_search_tool
+from lib.core import html_syntax_check
 from lib.extras import (
     code_format_lint, web_fetch,
 )
@@ -62,12 +66,22 @@ def main() -> None:
     print(f"[handy-coder-mcp] Authorized root: {support.ROOT}; shell: {support.SHELL}{ide_info}", file=sys.stderr)
     FastMCP = _load_fastmcp()
     mcp = FastMCP("handy-coder-mcp")
+    tool_details.install(mcp)
     for module in (
         read_files, create_file, apply_edits, terminal_exec, code_search, find_files,
-        diagnostics, run_tests, git_manage, build_project, commit_nudge,
-        code_format_lint, web_fetch, system_info, skills, orchestrator_bootstrap, orchestrator_tasks, subagent_tools,
+        diagnostics, run_tests, git_manage, build_project, commit_nudge, html_syntax_check,
+        code_format_lint, web_fetch, web_search_tool, system_info, skills, orchestrator_bootstrap, orchestrator_tasks, subagent_tools, code_navigator,
     ):
         module.register(mcp)
+
+    try:
+        result = code_navigator.index_codebase()
+        if result.get("error"):
+            raise RuntimeError(result["message"])
+        print(f"[handy-coder-mcp] C# index: {result}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[handy-coder-mcp] Startup indexing failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
     worker_supervisor.supervise_fastmcp_tools(mcp)
     mcp.run(transport="stdio")

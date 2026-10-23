@@ -282,6 +282,10 @@ class CoreFeedbackTests(unittest.TestCase):
         self.assertEqual(manager._tools["git_manage"].description, "after")
 
     def test_init_creates_root_repo_and_updates_description(self):
+        (self.root / "node_modules").mkdir()
+        (self.root / "custom").mkdir()
+        (self.root / "custom" / "__pycache__").mkdir()
+        (self.root / ".gitignore").write_text("# keep me\ncustom-rule\n", encoding="utf-8")
         result = {
             "stdout": "Initialized empty Git repository",
             "stderr": "",
@@ -304,6 +308,35 @@ class CoreFeedbackTests(unittest.TestCase):
         self.assertIn("Git repository available", self.mcp.descriptions["git_manage"])
         self.assertNotIn("ask whether", self.mcp.descriptions["git_manage"])
         self.assertEqual(git_manage._REPOSITORIES, (".",))
+        self.assertTrue((self.root / "test").is_dir())
+        self.assertTrue((self.root / "tmp").is_dir())
+        ignore_text = (self.root / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("# keep me\ncustom-rule", ignore_text)
+        self.assertIn(".handy-coder/", ignore_text)
+        self.assertIn("tmp/", ignore_text)
+        self.assertIn("node_modules/", ignore_text)
+        self.assertIn("__pycache__/", ignore_text)
+        git_manage._maintain_gitignore(self.root)
+        self.assertEqual((self.root / ".gitignore").read_text(encoding="utf-8"), ignore_text)
+
+    @unittest.skipUnless(shutil.which("git"), "Git is not installed")
+    def test_add_creates_ignore_file_before_staging(self):
+        subprocess.run(["git", "init", "--quiet", str(self.root)], check=True)
+        (self.root / "node_modules").mkdir()
+        (self.root / "new.txt").write_text("stage me\n", encoding="utf-8")
+
+        result = self.mcp.tools["git_manage"]("add", args=["new.txt"], repo_path=".")
+
+        self.assertEqual(result["exit_code"], 0, result)
+        ignore_text = (self.root / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn(".handy-coder/", ignore_text)
+        self.assertIn("tmp/", ignore_text)
+        self.assertIn("node_modules/", ignore_text)
+        staged = subprocess.run(
+            ["git", "ls-files", "--", "new.txt"], cwd=self.root,
+            check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(staged.stdout.strip(), "new.txt")
 
     def test_init_is_rejected_when_a_repository_is_already_available(self):
         (self.root / "project" / ".git").mkdir(parents=True)

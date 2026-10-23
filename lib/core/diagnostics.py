@@ -1,9 +1,30 @@
 import json, tomllib
+import os
+import shutil
 from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field
+from .. import support
 from ..support import inside, run_process, describe, setup_required
+
+
+def _configured_check_command(name: str, command: list[str]) -> list[str]:
+    """Use a workspace virtualenv executable when it is not on the server PATH."""
+    if name != "ruff":
+        return command
+    root = Path(support.ROOT)
+    venv_dirs = (root / ".venv" / "bin", root / "venv" / "bin")
+    if os.name == "nt":
+        venv_dirs += (root / ".venv" / "Scripts", root / "venv" / "Scripts")
+    for directory in venv_dirs:
+        executable = directory / "ruff"
+        if executable.is_file():
+            return [str(executable), *command[1:]]
+        if os.name == "nt" and executable.with_suffix(".exe").is_file():
+            return [str(executable.with_suffix(".exe")), *command[1:]]
+    located = shutil.which("ruff")
+    return [located, *command[1:]] if located else command
 
 
 def code_get_diagnostics(
@@ -91,6 +112,7 @@ def code_get_diagnostics(
             return {"supported": False, "error_code": "check_not_found", "message": f"No configured diagnostic check named {check!r}.", "detection_trace": detection_trace}
     # Try each candidate in order, skipping tools that are not installed.
     for name, cmd in candidates:
+        cmd = _configured_check_command(name, cmd)
         res = run_process(cmd, cwd=base, timeout_ms=timeout_ms)
         # Distinguish "tool not installed" from "tool ran and reported findings".
         if res["exit_code"] != 0 and res.get("stderr", "").startswith("Failed to start process:"):

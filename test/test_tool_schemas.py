@@ -13,6 +13,7 @@ from lib.core import (
     code_search,
     diagnostics,
     find_files,
+    html_syntax_check,
     commit_nudge,
     git_manage,
     read_files,
@@ -22,6 +23,7 @@ from lib.core import (
     terminal_exec,
     orchestrator_bootstrap,
     orchestrator_tasks,
+    web_search_tool,
 )
 from lib.extras import (
     browser,
@@ -62,6 +64,7 @@ class ToolSchemaTests(unittest.TestCase):
         for module in (
             apply_edits,
             create_file,
+            html_syntax_check,
             code_search,
             diagnostics,
             find_files,
@@ -81,12 +84,13 @@ class ToolSchemaTests(unittest.TestCase):
             lsp_lookup,
             semantic_search,
             web_fetch,
+            web_search_tool,
             subagent_tools,
         ):
             module.register(cls.mcp)
 
     def test_every_tool_and_argument_has_a_description(self):
-        self.assertEqual(len(self.mcp.tools), 26)
+        self.assertEqual(len(self.mcp.tools), 28)
         for name, function in self.mcp.tools.items():
             with self.subTest(tool=name):
                 self.assertTrue(self.mcp.descriptions[name].strip())
@@ -166,6 +170,25 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertIn("orchestrator-first", bootstrap_desc)
         self.assertIn("subagent", bootstrap_desc)
 
+    def test_apply_edits_schema_documents_group_expansion(self):
+        function = self.mcp.tools["apply_edits"]
+        signature = inspect.signature(function)
+        self.assertIn("expand_groups", signature.parameters)
+        self.assertIn("expand_groups=true", self.mcp.descriptions["apply_edits"])
+
+    def test_fastmcp_registered_apply_edits_schema_accepts_expand_groups(self):
+        try:
+            from mcp.server.fastmcp import FastMCP
+        except ModuleNotFoundError:
+            self.skipTest("FastMCP dependency is not installed")
+
+        server = FastMCP("schema-contract")
+        apply_edits.register(server)
+        registered = server._tool_manager._tools["apply_edits"]
+        schema = getattr(registered, "parameters", None) or getattr(registered, "input_schema", {})
+        self.assertIn("expand_groups", schema.get("properties", {}))
+        self.assertNotIn("expand_groups", schema.get("required", []))
+
     def test_every_tool_argument_has_a_concrete_json_schema(self):
         schema_keywords = {
             "type",
@@ -210,10 +233,12 @@ class ToolSchemaTests(unittest.TestCase):
         env_schema = TypeAdapter(get_type_hints(terminal_exec.terminal_exec, include_extras=True)["env"]).json_schema()
         extensions_schema = TypeAdapter(get_type_hints(code_search.search_text, include_extras=True)["extensions"]).json_schema()
         tags_schema = TypeAdapter(get_type_hints(skills.skills_manage, include_extras=True)["tags"]).json_schema()
+        language_schema = TypeAdapter(get_type_hints(code_format_lint.code_format_lint, include_extras=True)["language"]).json_schema()
         self.assertEqual(env_schema["anyOf"][0]["type"], "object")
         self.assertEqual(env_schema["anyOf"][0]["additionalProperties"]["type"], "string")
         self.assertEqual(extensions_schema["anyOf"][0]["items"]["type"], "string")
         self.assertEqual(tags_schema["anyOf"][0]["items"]["type"], "string")
+        self.assertIn("text", language_schema["enum"])
         self.assertIn('"MODE": "test"', self.mcp.descriptions["terminal_exec"])
         self.assertIn('[".py", ".md"]', self.mcp.descriptions["search_text"])
         hints = get_type_hints(apply_edits.apply_edits, include_extras=True)

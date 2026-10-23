@@ -25,7 +25,7 @@ Run against the current directory or select a workspace root:
 .venv/bin/handy-coder-mcp --root /home/user/my-app --shell /bin/bash
 ```
 
-`HANDY_CODER_ROOT` can provide the root when `--root` is omitted. `--shell` retains the shell override behavior. The server uses the configured root as its working directory and reports the authorized root in every tool description. Only the command-execution tool reports the working directory.
+`HANDY-CODER_ROOT` can provide the root when `--root` is omitted. `--shell` retains the shell override behavior. The server uses the configured root as its working directory and reports the authorized root in every tool description. Only the command-execution tool reports the working directory.
 
 ## MCP client configuration
 
@@ -54,7 +54,7 @@ For Kiro, Cursor, Claude Desktop, and other stdio MCP clients, point the server 
     "handy-coder-mcp": {
       "command": "/path/to/handy-coder-mcp/.venv/bin/python",
       "args": [
-        "/path/to/handy-coder-mcp/handy_coder_mcp.py"
+        "/path/to/handy-coder-mcp/handy-coder_mcp.py"
       ]
     }
   }
@@ -75,11 +75,11 @@ Alternatively, use the installed entry point:
 }
 ```
 
-The server registers `read_files`, `create_file`, `apply_edits`, `terminal_exec`, `search_text`, `find_files`, `code_get_diagnostics`, `run_tests`, `build_project`, `git_manage`, `defer_commit`, `get_capabilities`, `skills_manage`, `orchestrator_bootstrap`, `orchestrator_update_task_status`, `code_format_lint`, `web_fetch_docs`, `subagent_run`, `subagent_status`, `subagent_result`, `subagent_complete`, and `subagent_cancel`. See the [registered tool inventory](docs/TOOL_INVENTORY.md) for grouping and notes on unregistered extras.
+The server registers `read_files`, `create_file`, `html_syntax_check`, `apply_edits`, `terminal_exec`, `search_text`, `find_files`, `code_get_diagnostics`, `run_tests`, `build_project`, `git_manage`, `defer_commit`, `get_capabilities`, `get_tool_details`, `skills_manage`, `orchestrator_bootstrap`, `orchestrator_update_task_status`, `code_format_lint`, `web_fetch_docs`, `subagent_run`, `subagent_status`, `subagent_result`, `subagent_complete`, and `subagent_cancel`. Call `get_tool_details` with a tool name for its full documentation. See the [registered tool inventory](docs/TOOL_INVENTORY.md) for grouping and notes on unregistered extras.
 
 Tool modules are organized by tier: Tier 1 tools live in `lib/core`, and optional Tier 2 tools live in `lib/extras`.
 
-For optional-feature setup (DAP and browser automation), see [SETUP.md](docs/SETUP.md). For the canonical registered-tool list, see [docs/TOOL_INVENTORY.md](docs/TOOL_INVENTORY.md).
+For optional-feature and C# indexing setup, see [SETUP.md](./SETUP.md). For the canonical registered-tool list, see [TOOL_INVENTORY.md](./TOOL_INVENTORY.md).
 
 
 ### Check a stdio connection
@@ -87,13 +87,16 @@ For optional-feature setup (DAP and browser automation), see [SETUP.md](docs/SET
 If an MCP client reports request timeouts for every tool, first check that the configured command can start, complete the MCP handshake, list its tools, and answer a harmless read request. From this checkout, run:
 
 ```bash
-.venv/bin/python scripts/mcp_smoke_check.py --root "$PWD" --cwd "$PWD"
+.venv/bin/python test/scripts/mcp_smoke_check.py \
+  --command .venv/bin/handy-coder-mcp \
+  --root "$PWD" \
+  --cwd "$PWD"
 ```
 
 To check the exact installed command and workspace used by a client, pass them explicitly:
 
 ```bash
-.venv/bin/python scripts/mcp_smoke_check.py \
+.venv/bin/python test/scripts/mcp_smoke_check.py \
   --command /path/to/handy-coder-mcp/.venv/bin/handy-coder-mcp \
   --root /path/to/workspace \
   --cwd /path/to/workspace
@@ -105,7 +108,7 @@ The check initializes the server, lists registered tool names, and calls `read_f
 
 Use workspace-relative paths, which resolve from the configured `--root`. Path operations are strictly validated against that root before any filesystem access occurs. Read and edit responses retain their existing `path` field and include `resolved_path`. `read_files` returns `total_lines`, `applied_start`, and `applied_end` alongside the content.
 
-`apply_edits` validates and stages the entire batch of edits in memory before writing any changes to disk. If any edit in the batch contains an invalid regular expression, fails to match, or encounters a filesystem write failure, all changes are rolled back so no partial edits remain applied. Each edit requires `pattern` and `replacement`; legacy `old_str`/`new_str` aliases are rejected. Matching uses Python regex (`re` module). Replacement text is literal by default (capture references are interpreted only with `expand_groups=true`). `replace_all=true` can be bounded per edit with `max_replacements`; `case_insensitive=true` enables case-insensitive matching. A `position` is an object with 1-based `line` and `col` keys (for example, `{"line": 3, "col": 5}`); it starts searching at or after that coordinate and replaces the first match there.
+`apply_edits` validates and stages the entire batch of edits in memory before writing any changes to disk. If any edit in the batch contains an invalid regular expression, fails to match, or encounters a filesystem write failure, all changes are rolled back so no partial edits remain applied. Each edit requires `pattern` and `replacement`; legacy `old_str`/`new_str` aliases are rejected. Matching uses Python regex (`re` module). Replacement text is literal by default, including backslashes; set top-level `expand_groups=true` to interpret Python replacement templates such as `\1` or `\g<name>`. Invalid references return `invalid_replacement`. `replace_all=true` can be bounded per edit with `max_replacements`; `case_insensitive=true` enables case-insensitive matching. A `position` is an object with 1-based `line` and `col` keys (for example, `{"line": 3, "col": 5}`); it starts searching at or after that coordinate and replaces the first match there.
 
 If your client also exposes a separate `multi_edit` helper, use this quick guide:
 
@@ -136,17 +139,17 @@ If your client also exposes a separate `multi_edit` helper, use this quick guide
 | Invalid edit shape (missing/contradictory aliases) | `invalid_edit` | Batch stops; no files are written. |
 | Filesystem access/write failure | `io_error` (staging) or raised write failure with rollback | Any writes already performed are reverted to original content. |
 
-`find_files` and `search_text` return successful partial results when a workspace directory cannot be scanned. Their `errors` arrays identify skipped workspace-relative paths and explain the filesystem error. `find_files` supports extension/type and size filters, path/size/modified sorting, and optional size/time metadata. `search_text` supports `extensions` as an array of strings (for example, `[".py", ".md"]`), `case_insensitive`, and optional `context_lines` returning `context_before` and `context_after`; match entries contain the actual 1-based line number. `read_files` supports either `line_ranges` or `start_line`/`end_line` shorthand for one file, a selectable encoding, and optional size/time metadata. `create_file` supports POSIX permissions and an optional `.bak` backup on overwrite.
+`find_files` and `search_text` return successful partial results when a workspace directory cannot be scanned. Their `errors` arrays identify skipped workspace-relative paths and explain the filesystem error. `find_files` supports extension/type and size filters, path/size/modified sorting, and optional size/time metadata. `search_text` supports `extensions` as an array of strings (for example, `[".py", ".md"]`), `case_insensitive`, and optional `context_lines` returning `context_before` and `context_after`; match entries contain the actual 1-based line number. `read_files` supports either `line_ranges` or `start_line`/`end_line` shorthand for one file, a selectable encoding, and optional size/time metadata. `create_file` supports POSIX permissions and an optional `.bak` backup on overwrite. Successful HTML writes also ensure `static/html`, `static/js`, and `static/css` exist, return separation guidance, and include an HTML syntax check; use `html_syntax_check` to check a file independently.
 
 Unfiltered `run_tests` runs require a recognized test setup (for example, pytest configuration or actual test files); a generic `pyproject.toml` alone is not enough. Supplying both a framework and `filter_path` allows a targeted run without workspace-wide test discovery. `run_tests` parses test outcomes (e.g. `passed`, `failed`, `errors`, `skipped`) into a structured `parsed` metadata dictionary, and for pytest may include `hints`/`preflight_notes` for common import-path issues. If tests import local modules (for example `from lib import support`), adding `test/__init__.py` is recommended for reliable collection across environments.
 
 `code_get_diagnostics` executes recipes and includes the process `exit_code` in its response; `path`, `check`, and `timeout_ms` select its directory, configured check, and execution limit. `terminal_exec` accepts optional `env` as an object whose values are strings (for example, `{"MODE": "test"}`), `stdin`, and per-call `shell`; its `exit_code` is the process status, with 124 indicating timeout. Its terminal escape checks are heuristic lexical checks for recognizable path escapes, not a complete sandbox or OS isolation. `code_format_lint` discloses which formatters and linters were run in `tools_run` and which were missing in `tools_skipped`. `web_fetch_docs` retains its direct HTTP(S) and pagination design and includes `http_status`, `final_url`, and `truncated`; it does not provide browser/editor state.
 
-`build_project` detects Python, Node, and .NET configurations. It asks for `path` when more than one candidate exists, uses a Node lockfile to select the package manager, and returns parsed diagnostics and raw output. `timeout_ms` accepts 1–600000 milliseconds (default 30000). `git_manage` discovers Git repositories when first called. When several repositories are found, pass `repo_path`; relative file operands resolve from the selected repository root and remain confined there. Status returns staged, working-tree, and untracked summaries. Diff accepts `mode` (`unstaged`, `staged`, or `both`) and `file_paths`, while preserving raw diff text; log includes recent commits. Existing branch, stash, blame, and init actions remain available.
+`build_project` detects Python, Node, and .NET configurations. It asks for `path` when more than one candidate exists, uses a Node lockfile to select the package manager, and returns parsed diagnostics and raw output. `timeout_ms` accepts 1–600000 milliseconds (default 30000). `git_manage` discovers Git repositories when first called. When several repositories are found, pass `repo_path`; relative file operands resolve from the selected repository root and remain confined there. Status returns staged, working-tree, and untracked summaries. Diff accepts `mode` (`unstaged`, `staged`, or `both`) and `file_paths`, while preserving raw diff text; log includes recent commits. A successful `init` creates `test/` and `tmp/`, then creates or updates the root `.gitignore` with `.handy-coder/`, `tmp/`, and rules for common generated directories found in the repository. `add` applies the same idempotent update before staging and preserves existing ignore content. Existing branch, stash, and blame actions remain available.
 
 ### Skills
 
-`skills_manage` stores and retrieves reusable skills, which are Markdown files with a small frontmatter block (`name`, `description`, `invokable`) in the project's `skills` directory. Set `HANDY_CODER_SKILLS_DIR` to use a different directory. The directory is not tied to `--root`.
+`skills_manage` stores and retrieves reusable skills, which are Markdown files with a small frontmatter block (`name`, `description`, `invokable`) in the project's `skills` directory. Set `HANDY-CODER_SKILLS_DIR` to use a different directory. The directory is not tied to `--root`.
 
 - `action: "list"` returns every skill's `name`, `description` and `invokable` flag, plus an `errors` array for files that could not be read.
 - `action: "get"` with `name` returns the full `content` and the `body` without frontmatter.
@@ -156,15 +159,15 @@ Names must be 1-64 characters of lowercase letters, digits and hyphens, which al
 
 ### Subagents
 
-Subagent tools provide a stable five-tool contract for delegated work without requiring any new credentials. `get_capabilities` reports each role's allowed tools, tool-call budget, and result format. `subagent_result` pages results using `offset`, `total_length`, and `next_offset`; `subagent_cancel` requires `confirm: true`. Cooperative completion remains host-driven through `subagent_complete`; streaming and checkpoint/resume are unsupported.
+Subagent tools provide a stable five-tool contract for delegated work without requiring any new credentials. `get_capabilities` reports each role's allowed tools, tool-call budget, and result format. `subagent_result` pages results using `offset`, `total_length`, and `next_offset`; `subagent_cancel` requires `confirm: true`. Cooperative frames expire after five minutes. The host completes cooperative tasks with `subagent_complete`; a successful `git_manage` commit by a committer closes its frame automatically, while skipped or unsuccessful commits and other roles still require `subagent_complete`. Streaming and checkpoint/resume are unsupported.
 
-- `subagent_run`: starts a task with a role (`generalist`, `coder`, `explorer`, `reviewer`, or `planner`) and returns one of three statuses: `completed`, `running`, or `delegated_to_host`.
+- `subagent_run`: starts a task with a role (`generalist`, `coder`, `committer`, `explorer`, `reviewer`, or `planner`) and returns one of three statuses: `completed`, `running`, or `delegated_to_host`.
 - `subagent_status`: checks the current task state and usage.
 - `subagent_result`: fetches the full or paged result text.
 - `subagent_complete`: closes a cooperative delegated frame.
 - `subagent_cancel`: cancels a task.
 
-Role tool access is scoped: `generalist`/`explorer` stay read-only, `reviewer` adds diagnostics/test execution, and `planner`/`coder` can also use `create_file` + `apply_edits` when the task requires writing files.
+Role tool access is scoped: `generalist`/`explorer` stay read-only, `reviewer` adds diagnostics/test execution, `planner`/`coder` can also use `create_file` + `apply_edits` when the task requires writing files, and `committer` can use `git_manage`.
 
 Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, local Ollama when `SUBAGENT_LOCAL=1`, then `cooperative`.
 
@@ -181,7 +184,7 @@ Use subagents for broad searches, independent reviews, and large-input summaries
 
 ### Orchestrator bootstrap
 
-`orchestrator_bootstrap` creates `.handy_coder/implementation-plan.md` and `.handy_coder/tasks.md` from a single high-level request. The generated tasks file uses `[ ]` placeholders with explicit status labels (`non_started`, `interrupted`, `complete`, `failed`) so an orchestrator can track progress while repeatedly spawning subagents.
+`orchestrator_bootstrap` creates `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` from a single high-level request. The generated tasks file uses `[ ]` placeholders with explicit status labels (`non_started`, `interrupted`, `complete`, `failed`) so an orchestrator can track progress while repeatedly spawning subagents.
 
 `orchestrator_update_task_status` atomically updates a single `[status: ...]` task line (selected by `line_number` or `task_contains`) without rewriting progress manually.
 
@@ -189,7 +192,9 @@ Use subagents for broad searches, independent reviews, and large-input summaries
 
 Tier 2 tools are registered without requiring external services. Tools report a clear unsupported/configuration message when their optional backend is unavailable.
 
-- `code_format_lint`: uses installed Ruff or Black for Python and installed ESLint and/or Prettier for JavaScript/TypeScript. Project `node_modules/.bin` tools are recognized. Set `fix: true` to write formatting/fix changes.
+- `code_format_lint`: `auto` infers Python and JavaScript/TypeScript from supported file extensions; use `language="auto"` when a language cannot be inferred. `language="text"` is a successful no-op and runs no tools, including with `fix: true`. The tool uses installed Ruff or Black for Python and ESLint for JavaScript/TypeScript. Install `.[javascript-format]` to enable jsbeautifier formatting for `.js`, `.mjs`, and `.cjs` files; it uses two-space indentation. Set `fix: true` to write formatting/fix changes.
+- `create_file`: Python files receive automatic processing and formatting during creation; HTML files receive a syntax check.
+- When creating a Python file or applying edits to one, review `requirements.txt` and add any new third-party dependencies the Python change introduces. The file-writing tools include this reminder in successful Python write responses.
 - `web_fetch_docs`: direct public HTTP(S) fetching is available without credentials. Requests to private, local, or reserved addresses are blocked.
 
 This server does not include the Tier 2 external MCP gateway tool.
@@ -203,4 +208,4 @@ This server does not include the Tier 2 external MCP gateway tool.
 - `find_files` and repository discovery impose a 15-second scan time limit and a 5,000-entry ceiling; results are marked `incomplete: true` if either limit is reached.
 - Use relative paths inside the workspace. Commands such as `npm test`, `git status`, `ls`, and `python scripts/build.py` run with the workspace as their default directory.
 
-`terminal_exec` and `git_manage` can modify the workspace. Review changes with `git_manage` actions `status` and `diff` before committing. `git_manage` can also push to a configured remote when using the `push` action.
+`terminal_exec` and `git_manage` can modify the workspace. Review changes with `git_manage` actions `status` and `diff` before committing, and review `.gitignore` for missing generated artifact rules. `git_manage` can also push to a configured remote when using the `push` action.

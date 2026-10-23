@@ -32,7 +32,7 @@ def _plan_content(user_task: str, context: str | None) -> str:
         "- [ ] Spawn `subagent_run(role=\"generalist\", ...)` to assess scope, assumptions, and risks.\n"
         "- [ ] Save the generalist output into this implementation plan under **Generalist Assessment**.\n"
         "- [ ] Spawn `subagent_run(role=\"planner\", ...)` using this plan as context to produce non-interfering tasks.\n"
-        "- [ ] Write planner output into `.handy_coder/tasks.md` with `[ ]` before each task item.\n"
+        "- [ ] Write planner output into `.handy-coder/tasks.md` with `[ ]` before each task item.\n"
         "- [ ] Execute tasks one-by-one by spawning `coder` subagents for implementation details.\n"
         "- [ ] Track task outcomes (`non_started`, `interrupted`, `complete`, `failed`) in `tasks.md`.\n\n"
         "## Orchestrator Memory Policy\n\n"
@@ -72,7 +72,7 @@ def _write_text(path: Path, content: str, overwrite: bool) -> None:
 def orchestrator_bootstrap(
     user_task: Annotated[str, Field(min_length=3, description="High-level user request the orchestrator should break down into a plan and task tracker.")],
     context: Annotated[str | None, Field(description="Optional additional context to include in the generated implementation plan.")] = None,
-    overwrite: Annotated[bool, Field(description="When true, overwrite existing `.handy_coder/implementation-plan.md` and `.handy_coder/tasks.md` files.")] = False,
+    overwrite: Annotated[bool, Field(description="When true, overwrite existing `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` files.")] = False,
 ) -> dict:
     state_dir = support.ensure_handy_coder_state_dir()
     plan_path = state_dir / "implementation-plan.md"
@@ -108,7 +108,7 @@ def orchestrator_bootstrap(
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Create `.handy_coder/implementation-plan.md` and `.handy_coder/tasks.md` from a single high-level request. "
+        "Create `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` from a single high-level request. "
         "This bootstraps an orchestrator-first workflow where generalist/planner/coder subagents are the default execution path and the parent agent keeps minimal retained context. "
         "tasks.md lines start with [ ] and include status labels for non_started, interrupted, complete, or failed. "
         "When to use: Start orchestrated multi-step work with persistent plan artifacts and frequent subagent delegation."

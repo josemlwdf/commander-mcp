@@ -31,10 +31,10 @@ class IdeDetectorTests(unittest.TestCase):
             self.assertEqual(ide_detector.detect_ide(), "cursor")
 
     def test_uri_to_path_wsl_remote(self):
-        uri = "vscode-remote://wsl%2Bkali-linux/opt/handy_coder_mcp"
+        uri = "vscode-remote://wsl%2Bkali-linux/opt/handy-coder_mcp"
         path = ide_detector.uri_to_path(uri)
         self.assertIsNotNone(path)
-        self.assertEqual(str(path), "/opt/handy_coder_mcp")
+        self.assertEqual(str(path), "/opt/handy-coder_mcp")
 
     def test_uri_to_path_wsl_network_share(self):
         uri = "file://wsl.localhost/kali-linux/home/think/repo"
@@ -69,7 +69,7 @@ class IdeDetectorTests(unittest.TestCase):
         self.assertTrue(ide_detector._is_disallowed_default_root(Path("/")))
         self.assertTrue(ide_detector._is_disallowed_default_root(Path("/mnt/c")))
         self.assertTrue(ide_detector._is_disallowed_default_root(Path("/mnt/c/Users/josel")))
-        self.assertFalse(ide_detector._is_disallowed_default_root(Path("/opt/handy_coder_mcp")))
+        self.assertFalse(ide_detector._is_disallowed_default_root(Path("/opt/handy-coder_mcp")))
 
     def test_recover_workspace_roots_from_storage_json(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -107,16 +107,17 @@ class IdeDetectorTests(unittest.TestCase):
                 ide_detector.detect_working_dir(candidate=str(p1)),
                 str(p1.resolve()),
             )
+            self.assertEqual(handy_coder_mcp._resolve_root(str(p1)), str(p1.resolve()))
 
-            # HANDY_CODER_ROOT wins over IDE settings
-            with patch.dict(os.environ, {"HANDY_CODER_ROOT": str(p2)}):
+            # HANDY-CODER_ROOT wins over IDE settings
+            with patch.dict(os.environ, {"HANDY-CODER_ROOT": str(p2)}):
                 self.assertEqual(
                     ide_detector.detect_working_dir(),
                     str(p2.resolve()),
                 )
 
             # Unexpanded variable is ignored, falls back to IDE settings or script_dir
-            with patch.dict(os.environ, {"HANDY_CODER_ROOT": "${workspaceFolder}"}):
+            with patch.dict(os.environ, {"HANDY-CODER_ROOT": "${workspaceFolder}"}):
                 with patch("lib.ide_detector.recover_workspace_roots", return_value=[]):
                     with patch("pathlib.Path.cwd", return_value=Path("/mnt/c/Users/josel")):
                         res = ide_detector.detect_working_dir(candidate="${workspaceFolder}", script_dir=tmp_path)
@@ -146,6 +147,64 @@ class IdeDetectorTests(unittest.TestCase):
                     with patch("pathlib.Path.cwd", return_value=Path("/mnt/c/Users/josel")):
                         detected = ide_detector.detect_working_dir(script_dir=Path(tmp_dir) / "script")
                         self.assertEqual(detected, str(active_project.resolve()))
+
+    def test_detect_working_dir_uses_process_cwd_for_multiple_workspaces(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            workspace_a = base / "workspace_a"
+            workspace_b = base / "workspace_b"
+            checkout = base / "server"
+            for path in (workspace_a, workspace_b, checkout):
+                path.mkdir()
+
+            # Candidate order can change with global window recency. The MCP
+            # process cwd remains the per-launch workspace signal.
+            for roots in ([workspace_a, workspace_b], [workspace_b, workspace_a]):
+                for process_workspace in (workspace_a, workspace_b):
+                    with self.subTest(roots=roots, cwd=process_workspace):
+                        with patch("lib.ide_detector.detect_ide", return_value="vscode"):
+                            with patch("lib.ide_detector.recover_workspace_roots", return_value=roots):
+                                with patch("pathlib.Path.cwd", return_value=process_workspace):
+                                    detected = ide_detector.detect_working_dir(script_dir=checkout)
+                        self.assertEqual(detected, str(process_workspace.resolve()))
+
+    def test_detect_working_dir_ignores_ambiguous_storage_after_stale_last_active(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            stale = base / "stale_last_active"
+            current = base / "current_workspace"
+            checkout = base / "server"
+            for path in (stale, current, checkout):
+                path.mkdir()
+            fake_user = base / "User"
+            storage_dir = fake_user / "globalStorage"
+            storage_dir.mkdir(parents=True)
+            (storage_dir / "storage.json").write_text(json.dumps({
+                "windowsState": {
+                    "lastActiveWindow": {"folder": stale.as_uri()},
+                    "openedWindows": [{"folder": current.as_uri()}],
+                }
+            }))
+
+            with patch("lib.ide_detector.find_ide_user_data_dirs", return_value=[fake_user]):
+                with patch("lib.ide_detector.detect_ide", return_value="vscode"):
+                    with patch("pathlib.Path.cwd", return_value=current):
+                        detected = ide_detector.detect_working_dir(script_dir=checkout)
+            self.assertEqual(detected, str(current.resolve()))
+
+    def test_detect_working_dir_ambiguous_storage_falls_back_to_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            first = base / "first"
+            second = base / "second"
+            checkout = base / "server"
+            for path in (first, second, checkout):
+                path.mkdir()
+            with patch("lib.ide_detector.detect_ide", return_value="vscode"):
+                with patch("lib.ide_detector.recover_workspace_roots", return_value=[first, second]):
+                    with patch("pathlib.Path.cwd", return_value=Path("/mnt/c/Users/josel")):
+                        detected = ide_detector.detect_working_dir(script_dir=checkout)
+            self.assertEqual(detected, str(checkout.resolve()))
 
     def test_handy_coder_resolve_root_integration(self):
         # handy_coder_mcp._resolve_root should resolve to the open workspace or checkout

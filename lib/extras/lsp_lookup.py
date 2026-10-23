@@ -118,14 +118,14 @@ def lsp_symbol_lookup(
 ) -> dict:
         # Check configuration first so the client learns the feature is off
         # before spending effort validating arguments.
-        configured = os.environ.get("HANDY_CODER_LSP_COMMAND", "").strip()
+        configured = os.environ.get("HANDY-CODER_LSP_COMMAND", "").strip()
         if not configured:
             return {
                 "supported": False,
                 "error_code": "not_configured",
-                "env_var": "HANDY_CODER_LSP_COMMAND",
-                "message": "Set HANDY_CODER_LSP_COMMAND to a local language-server command to enable LSP lookup.",
-                "hint": "Example: HANDY_CODER_LSP_COMMAND='pylsp'. Then verify with get_capabilities and retry.",
+                "env_var": "HANDY-CODER_LSP_COMMAND",
+                "message": "Set HANDY-CODER_LSP_COMMAND to a local language-server command to enable LSP lookup.",
+                "hint": "Example: HANDY-CODER_LSP_COMMAND='pylsp'. Then verify with get_capabilities and retry.",
                 "next_step": "See docs/SETUP.md#lsp-lsp_symbol_lookup for setup instructions.",
             }
         if not symbol_name.strip():
@@ -137,7 +137,7 @@ def lsp_symbol_lookup(
             raise ValueError("LSP line and character positions are 0-based and must be non-negative")
         command = shlex.split(configured, posix=os.name != "nt")
         if not command:
-            raise ValueError("HANDY_CODER_LSP_COMMAND must contain an executable")
+            raise ValueError("HANDY-CODER_LSP_COMMAND must contain an executable")
 
         process = subprocess.Popen(
             command, cwd=support.ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -187,8 +187,8 @@ def lsp_symbol_lookup(
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Look up a definition at a 0-based source position using HANDY_CODER_LSP_COMMAND (no shell). "
-        "Requires HANDY_CODER_LSP_COMMAND set to a local language server command. "
+        "Look up a definition at a 0-based source position using HANDY-CODER_LSP_COMMAND (no shell). "
+        "Requires HANDY-CODER_LSP_COMMAND set to a local language server command. "
         "When to use: Navigate to a symbol's definition."
     ))(lsp_symbol_lookup)
 

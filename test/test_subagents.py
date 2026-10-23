@@ -6,6 +6,7 @@ from unittest.mock import patch
 from lib import support
 from lib.subagents import tools as subagent_tools
 from lib.subagents import loop as subagent_loop
+from lib.subagents.manager import SubagentLimits, SubagentManager
 from lib.subagents.resolve import resolve_backend
 from lib.subagents.roles import get_role
 
@@ -100,6 +101,61 @@ class SubagentToolTests(unittest.TestCase):
         wrapped = subagent_tools.after_tool_call("read_files", {"message": "ok"})
         self.assertIn("subagent_reminder", wrapped)
         self.assertIn("subagent_complete", wrapped["subagent_reminder"])
+
+    def test_successful_committer_action_completes_frame_automatically(self):
+        run = self.mcp.tools["subagent_run"](role="committer", task="commit changes")
+
+        result = subagent_tools.after_tool_call(
+            "git_manage",
+            {"exit_code": 0, "stdout": "[main abc123] update"},
+            {"action": "commit"},
+        )
+
+        self.assertEqual(result["subagent_completion"]["status"], "completed")
+        self.assertEqual(result["subagent_completion"]["task_id"], run["task_id"])
+        self.assertEqual(
+            self.mcp.tools["subagent_status"](task_id=run["task_id"])["state"],
+            "done",
+        )
+        self.assertNotIn("subagent_reminder", result)
+
+    def test_unsuccessful_committer_action_stays_open_for_explicit_completion(self):
+        run = self.mcp.tools["subagent_run"](role="committer", task="commit changes")
+
+        result = subagent_tools.after_tool_call(
+            "git_manage", {"exit_code": 1, "stderr": "nothing staged"}, {"action": "commit"}
+        )
+
+        self.assertIn("subagent_reminder", result)
+        self.assertEqual(
+            self.mcp.tools["subagent_status"](task_id=run["task_id"])["state"],
+            "delegated",
+        )
+        self.mcp.tools["subagent_complete"](
+            task_id=run["task_id"], result="Commit skipped: nothing staged."
+        )
+
+    def test_frame_expiry_is_five_minutes_and_task_ttl_stays_separate(self):
+        limits = SubagentLimits()
+        self.assertEqual(limits.frame_ttl_seconds, 300)
+        self.assertEqual(limits.task_ttl_seconds, 1200)
+
+        manager = SubagentManager(limits)
+        task = manager.create_task("explorer", "inspect", "cooperative", None, None)
+        frame = manager.make_frame(task.task_id, get_role("explorer"), "inspect")
+        self.assertEqual(frame.expires_at - frame.opened_at, 300)
+        self.assertEqual(task.expires_at - task.created_at, 1200)
+
+    def test_expired_cooperative_frame_is_removed_and_task_fails(self):
+        manager = SubagentManager(SubagentLimits())
+        with patch("lib.subagents.manager.time.time", return_value=100.0):
+            task = manager.create_task("explorer", "inspect", "cooperative", None, None)
+            frame = manager.make_frame(task.task_id, get_role("explorer"), "inspect")
+            manager.mark_delegated(task.task_id, frame)
+
+        with patch("lib.subagents.manager.time.time", return_value=401.0):
+            self.assertIsNone(manager.open_frame())
+            self.assertEqual(manager.get_task(task.task_id).state, "failed")
 
 
     def test_direct_backend_wait_completes_inline(self):

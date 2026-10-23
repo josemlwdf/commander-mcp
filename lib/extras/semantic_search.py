@@ -28,13 +28,13 @@ def vector_search_codebase(
             raise ValueError("natural_language_query cannot be empty")
         if not 1 <= top_k <= 20:
             raise ValueError("top_k must be between 1 and 20")
-        model_path = os.environ.get("HANDY_CODER_EMBEDDING_MODEL", "").strip()
+        model_path = os.environ.get("HANDY-CODER_EMBEDDING_MODEL", "").strip()
         if not model_path:
             return {
                 "supported": False,
                 "error_code": "not_configured",
-                "env_var": "HANDY_CODER_EMBEDDING_MODEL",
-                "message": "Set HANDY_CODER_EMBEDDING_MODEL to an already installed local model to enable semantic search.",
+                "env_var": "HANDY-CODER_EMBEDDING_MODEL",
+                "message": "Set HANDY-CODER_EMBEDDING_MODEL to an already installed local model to enable semantic search.",
             }
         try:
             from sentence_transformers import SentenceTransformer
@@ -97,10 +97,10 @@ def vector_search_codebase(
 
 def register(mcp):
     return mcp.tool(description=describe(
-        "Search source semantically with local model HANDY_CODER_EMBEDDING_MODEL; downloads are disabled. "
+        "Search source semantically with local model HANDY-CODER_EMBEDDING_MODEL; downloads are disabled. "
         f"Indexes on demand up to {MAX_FILES} workspace source files (max {MAX_FILE_BYTES // 1024} KiB each). "
         "Returns top_k ranked file matches with cosine similarity scores (score) and snippets up to 1200 characters. "
-        "Requires sentence-transformers and HANDY_CODER_EMBEDDING_MODEL. "
+        "Requires sentence-transformers and HANDY-CODER_EMBEDDING_MODEL. "
         "When to use: Find code by concept or intent."
     ))(vector_search_codebase)
 

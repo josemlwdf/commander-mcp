@@ -1,0 +1,11 @@
+# Runtime dependencies (also declared in pyproject.toml).
+mcp>=1.2,<2
+pydantic>=2,<3
+tree-sitter>=0.23,<0.26
+tree-sitter-c-sharp>=0.23,<0.24
+beautifulsoup4>=4.12,<5
+
+# jsbeautifier enables JavaScript formatting; pytest and ruff support repo checks.
+jsbeautifier>=1.15,<2
+pytest
+ruff

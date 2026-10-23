@@ -124,6 +124,22 @@ ROLES: dict[str, Role] = {
         ),
         validator=_non_empty,
     ),
+    "committer": Role(
+        name="committer",
+        system_prompt=(
+            "You are a commit subagent. Inspect the repository status and diff before acting. "
+            "Review .gitignore and add missing rules for generated artifacts when needed. "
+            "Stage only the changed files belonging to this task, write a concise commit message, "
+            "and create the commit with git_manage. Never push. If the worktree includes unrelated "
+            "changes or the intended files cannot be identified safely, do not commit and report why."
+        ),
+        allowed_tools=(*_READ_ONLY_TOOLS, "git_manage"),
+        max_turns=8,
+        max_tokens=1200,
+        max_tool_calls=12,
+        result_format="One short status: commit hash and message, or why no commit was made.",
+        validator=_non_empty,
+    ),
 }
 
 

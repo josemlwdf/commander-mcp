@@ -20,7 +20,7 @@ GENERATED_DIRS = frozenset({
 # This constant documents the intended deadline for future worker-subprocess
 # isolation; see lib/_worker.py for the run_in_worker implementation.
 WORKER_DEADLINE_SECONDS = 30.0
-HANDY_CODER_STATE_DIRNAME = ".handy_coder"
+HANDY_CODER_STATE_DIRNAME = ".handy-coder"
 
 
 def setup_required(*, missing_requirements: list[str], remediation_commands: list[str], documentation_url: str, message: str, error_code: str = "setup_required") -> dict:

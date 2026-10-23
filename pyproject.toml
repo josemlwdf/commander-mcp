@@ -7,14 +7,14 @@ name = "handy-coder-mcp"
 version = "2.0.0"
 description = "Workspace-confined MCP server for coding agents"
 requires-python = ">=3.11"
-dependencies = ["mcp>=1.2,<2"]
+dependencies = ["mcp>=1.2,<2", "tree-sitter>=0.23,<0.26", "tree-sitter-c-sharp>=0.23,<0.24", "beautifulsoup4>=4.12,<5", "jsbeautifier>=1.15,<2", "pytest", "ruff"]
 
 [project.scripts]
 handy-coder-mcp = "handy_coder_mcp:main"
 
 [tool.setuptools]
 py-modules = ["handy_coder_mcp"]
-packages = ["lib", "lib.core", "lib.extras", "lib.subagents"]
+packages = ["lib", "lib.core", "lib.extras", "lib.subagents", "lib.utils"]
 
 [tool.pytest.ini_options]
 testpaths = ["test"]

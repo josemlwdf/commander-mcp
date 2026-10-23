@@ -50,6 +50,11 @@ class CommitNudgeTests(unittest.TestCase):
         self.assertIn("commit_nudge", result)
         self.assertEqual(result["commit_nudge"]["level"], "soft")
         self.assertGreaterEqual(result["commit_nudge"]["lines"], 80)
+        self.assertIn("Review .gitignore", result["commit_nudge"]["message"])
+        nudge = commit_nudge._format_nudge(
+            "soft", "threshold", commit_nudge.measure_diff(), commit_nudge.STATE
+        )
+        self.assertIn("Review .gitignore", nudge)
 
     def test_dry_run_does_not_advance_tracking_or_attach_nudge(self):
         lines = "\n".join(f"line {i}" for i in range(90)) + "\n"

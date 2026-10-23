@@ -31,7 +31,7 @@ Or choose a workspace explicitly:
 .venv/bin/handy-coder-mcp --root /path/to/project
 ```
 
-`--root` sets the workspace used by file tools and as the default command directory. `HANDY_CODER_ROOT` can set the same value when `--root` is omitted. `--shell` optionally selects the shell used by command execution.
+`--root` sets the workspace used by file tools and as the default command directory. `HANDY-CODER_ROOT` can set the same value when `--root` is omitted. `--shell` optionally selects the shell used by command execution.
 
 ## Connect an MCP client
 
@@ -52,9 +52,29 @@ Configure your client to launch the installed command and set its working direct
 
 Replace the command path with the installed executable on your machine. Other stdio MCP clients use the same command and argument pattern in their own configuration format.
 
+For Continue running on Windows with the server installed in WSL, add this to your Continue config (for example, `~/.continue/mcpServers/handy-coder-mcp.yaml`):
+
+```yaml
+name: handy-coder-mcp
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: Handy Coder
+    type: stdio
+    command: wsl
+    args:
+      - -d
+      - kali-linux
+      - /opt/handy-coder-mcp/.venv/bin/python
+      - /opt/handy-coder-mcp/handy_coder_mcp.py
+    env: {}
+```
+
 ## What it provides
 
 The server includes tools for workspace file operations, code search, terminal commands, diagnostics, test execution, Git actions, skills, orchestration, and subagents. Optional tools can format or lint code when supported binaries are installed, and fetch text from public web pages.
+
+For local C# navigation, `index_codebase` incrementally indexes workspace `.cs` files in `.handy-coder/code_index.sqlite3`. `code_navigator` supports `search_code`, `get_symbol`, and `find_references`; search is lexical and references are syntax based, not compiler resolved. Tree-sitter C# and SQLite FTS5 are required.
 
 The available tools and optional dependencies vary by environment. Use `get_capabilities` from your MCP client to see what is available. The full [tool inventory](docs/TOOL_INVENTORY.md) lists registered tools; [optional setup notes](docs/SETUP.md) cover configuration and troubleshooting.
 
@@ -69,6 +89,10 @@ If the client cannot connect or times out, confirm it launches the same Python e
 ```sh
 .venv/bin/python scripts/mcp_smoke_check.py --root "$PWD" --cwd "$PWD"
 ```
+
+## Known issues
+
+- When two VS Code instances are open, Handy Coder MCP may select the working directory from the wrong instance. See the [investigation plan](docs/INVESTIGATION_PLAN_VSCODE_WORKSPACE.md).
 
 ## Development
 

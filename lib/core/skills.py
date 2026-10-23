@@ -11,7 +11,7 @@ Skills are Markdown files with a small frontmatter block::
     Body of the skill...
 
 They live in the project's ``skills`` directory (override with the
-``HANDY_CODER_SKILLS_DIR`` environment variable). The file name stem is the
+``HANDY-CODER_SKILLS_DIR`` environment variable). The file name stem is the
 skill's identifier.
 """
 from __future__ import annotations
@@ -26,7 +26,8 @@ from pydantic import Field
 
 from ..support import describe
 
-SKILLS_DIR_ENV = "HANDY_CODER_SKILLS_DIR"
+SKILLS_DIR_ENV = "HANDY-CODER_SKILLS_DIR"
+BASELINE_SKILLS = frozenset({"grill-me", "handoff", "mcp-audit", "mcp-tools-only", "plan"})
 MAX_SKILL_BYTES = 256 * 1024
 MAX_DESCRIPTION_CHARS = 300
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -231,8 +232,18 @@ def skills_manage(
     if action == "delete":
         problem = _validate_name(name)
         if problem: return problem
+        if name in BASELINE_SKILLS:
+            return _error("protected_skill", f"Baseline skill cannot be deleted: {name}")
+        if not confirm:
+            return _error("confirmation_required", f"Call again with confirm=true to delete skill: {name}")
         try:
-            (_skills_dir() / f"{name}.md").unlink()
+            path = _skills_dir() / f"{name}.md"
+            backup = path.with_suffix(path.suffix + ".bak")
+            if backup.exists():
+                return _error("backup_exists", f"Refusing to overwrite existing backup: {backup.name}")
+            import shutil
+            shutil.copy2(path, backup)
+            path.unlink()
             return {"deleted": True, "name": name}
         except FileNotFoundError:
             return _error("not_found", f"Skill not found: {name}")

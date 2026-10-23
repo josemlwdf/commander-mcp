@@ -96,33 +96,33 @@ class _DapClient:
 
 
 def _configured_endpoint() -> tuple[str, int] | None:
-    host = os.environ.get("HANDY_CODER_DAP_HOST", "127.0.0.1").strip()
-    raw_port = os.environ.get("HANDY_CODER_DAP_PORT", "").strip()
+    host = os.environ.get("HANDY-CODER_DAP_HOST", "127.0.0.1").strip()
+    raw_port = os.environ.get("HANDY-CODER_DAP_PORT", "").strip()
     if not raw_port:
         return None
     try:
         port = int(raw_port)
     except ValueError as exc:
-        raise ValueError("HANDY_CODER_DAP_PORT must be an integer") from exc
+        raise ValueError("HANDY-CODER_DAP_PORT must be an integer") from exc
     try:
         address = ipaddress.ip_address(host)
     except ValueError as exc:
         if host != "localhost":
-            raise ValueError("HANDY_CODER_DAP_HOST must be localhost or a loopback IP address") from exc
+            raise ValueError("HANDY-CODER_DAP_HOST must be localhost or a loopback IP address") from exc
         address = ipaddress.ip_address("127.0.0.1")
     if not address.is_loopback:
         raise ValueError("DAP connections are restricted to localhost")
     if not 1 <= port <= 65535:
-        raise ValueError("HANDY_CODER_DAP_PORT must be between 1 and 65535")
+        raise ValueError("HANDY-CODER_DAP_PORT must be between 1 and 65535")
     return host, port
 
 
 def _start(client: _DapClient, breakpoint_file: str | None, line: int | None, raw_config: str, adapter_id: str) -> None:
     if not raw_config:
-        raise ValueError("Set HANDY_CODER_DAP_START_REQUEST to a JSON launch/attach request before starting a session")
+        raise ValueError("Set HANDY-CODER_DAP_START_REQUEST to a JSON launch/attach request before starting a session")
     config = json.loads(raw_config)
     if not isinstance(config, dict) or config.get("command") not in ("launch", "attach") or not isinstance(config.get("arguments"), dict):
-        raise ValueError("HANDY_CODER_DAP_START_REQUEST must contain command=launch|attach and an arguments object")
+        raise ValueError("HANDY-CODER_DAP_START_REQUEST must contain command=launch|attach and an arguments object")
     arguments = config["arguments"]
     if breakpoint_file is None and line is not None:
         raise ValueError("breakpoint_file is required when line is provided")
@@ -289,7 +289,7 @@ def _stop_worker() -> None:
 
 def register(mcp):
     @mcp.tool(description=describe(
-        "Control a local DAP adapter configured with HANDY_CODER_DAP_HOST/PORT and HANDY_CODER_DAP_START_REQUEST. "
+        "Control a local DAP adapter configured with HANDY-CODER_DAP_HOST/PORT and HANDY-CODER_DAP_START_REQUEST. "
         "When to use: Start, step through, inspect, or stop a debug session."
     ))
     def debug_session_step(
@@ -297,7 +297,7 @@ def register(mcp):
             Literal["start", "step_over", "step_into", "inspect_vars", "stop"],
             Field(description=(
                 "Debugger operation. "
-                "start: begin a new session using HANDY_CODER_DAP_START_REQUEST (launch or attach). "
+                "start: begin a new session using HANDY-CODER_DAP_START_REQUEST (launch or attach). "
                 "step_over: advance past the current line without entering function calls. "
                 "step_into: step into the function call on the current line. "
                 "inspect_vars: return variables visible in the current stack frame. "
@@ -316,20 +316,20 @@ def register(mcp):
         endpoint = _configured_endpoint()
         if endpoint is None:
             response = setup_required(
-                missing_requirements=["env:HANDY_CODER_DAP_PORT", "env:HANDY_CODER_DAP_START_REQUEST", "dap-adapter"],
-                remediation_commands=["Set HANDY_CODER_DAP_PORT and HANDY_CODER_DAP_START_REQUEST for your adapter."],
+                missing_requirements=["env:HANDY-CODER_DAP_PORT", "env:HANDY-CODER_DAP_START_REQUEST", "dap-adapter"],
+                remediation_commands=["Set HANDY-CODER_DAP_PORT and HANDY-CODER_DAP_START_REQUEST for your adapter."],
                 documentation_url="docs/SETUP.md#dap-debug_session_step",
                 message="Configure a local DAP adapter to enable debugging.", error_code="not_configured",
             )
-            response["env_var"] = "HANDY_CODER_DAP_PORT"
-            response["hint"] = "HANDY_CODER_DAP_START_REQUEST must be JSON with command=launch|attach and arguments."
+            response["env_var"] = "HANDY-CODER_DAP_PORT"
+            response["hint"] = "HANDY-CODER_DAP_START_REQUEST must be JSON with command=launch|attach and arguments."
             return response
         # Validate cross-field constraint only after confirming the tool is configured.
         if line is not None and breakpoint_file is None:
             raise ValueError("breakpoint_file is required when line is provided")
 
-        start_request = os.environ.get("HANDY_CODER_DAP_START_REQUEST", "").strip()
-        adapter_id = os.environ.get("HANDY_CODER_DAP_ADAPTER_ID", "python")
+        start_request = os.environ.get("HANDY-CODER_DAP_START_REQUEST", "").strip()
+        adapter_id = os.environ.get("HANDY-CODER_DAP_ADAPTER_ID", "python")
 
         with _LOCK:
             _ensure_worker()

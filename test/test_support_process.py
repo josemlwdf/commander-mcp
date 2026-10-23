@@ -46,7 +46,7 @@ class SupportProcessTests(unittest.TestCase):
             self.assertGreaterEqual(result["duration_ms"], 0)
 
     def test_configure_creates_handy_coder_state_dir(self):
-        state_dir = Path(support.ROOT) / ".handy_coder"
+        state_dir = Path(support.ROOT) / ".handy-coder"
         self.assertTrue(state_dir.exists())
         self.assertTrue(state_dir.is_dir())
 

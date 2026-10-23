@@ -90,13 +90,63 @@ def create_file(
     except OSError as exc:
         return _error("io_error", path, f"{exc.strerror or 'File could not be written'}: {path}")
 
-    return {
+    result = {
         "path": str(p.relative_to(support.ROOT)),
         "created": not existed,
         "overwritten": existed,
         "bytes": len(encoded),
         "lines": len(content.splitlines()),
     }
+    if p.suffix.lower() == ".py":
+        from ..utils.python_postprocess import process_python_file
+        from ..extras.code_format_lint import code_format_lint
+
+        try:
+            processing = process_python_file(p)
+        except Exception as exc:
+            processing = {"path": str(p.relative_to(support.ROOT)), "ok": False,
+                          "error": str(exc), "changes": [], "uncertain": []}
+        try:
+            formatting = code_format_lint([str(p.relative_to(support.ROOT))], fix=True, language="python")
+        except Exception as exc:
+            formatting = {"supported": False, "ok": False, "error": str(exc), "reports": [],
+                          "tools_run": [], "tools_skipped": []}
+        result["python_processing"] = processing
+        result["formatter"] = formatting
+        result["post_processing_ok"] = bool(processing.get("ok")) and bool(formatting.get("ok"))
+        result["dependency_hint"] = (
+            "Review requirements.txt and add any new third-party dependencies introduced by this Python file."
+        )
+    elif p.suffix.lower() in {".html", ".htm"}:
+        from . import html_syntax_check
+        from ..utils.html_prettify import prettify_html
+
+        saved_content, formatting = prettify_html(content)
+        if formatting["ok"] and saved_content != content:
+            try:
+                p.write_text(saved_content, encoding="utf-8")
+                content = saved_content
+            except OSError as exc:
+                formatting = {"ok": False, "changed": False,
+                              "error": f"Could not save formatted content: {exc.strerror or 'write failed'}"}
+        result["formatter"] = formatting
+        result["bytes"] = len(content.encode("utf-8"))
+        result["lines"] = len(content.splitlines())
+
+        folders = ("static/html", "static/js", "static/css")
+        folder_results = []
+        for folder in folders:
+            target = support.ROOT / folder
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+                folder_results.append({"path": folder, "created": True})
+            except OSError as exc:
+                folder_results.append({"path": folder, "created": False,
+                                      "error": exc.strerror or "Directory could not be created"})
+        result["asset_folders"] = folder_results
+        result["guidance"] = "Separate the page's HTML, JavaScript, and CSS into files under static/html, static/js, and static/css, respectively."
+        result["syntax_check"] = html_syntax_check.check_html(content)
+    return result
 
 
 def register(mcp):
@@ -107,6 +157,7 @@ def register(mcp):
         "Optional permissions sets POSIX mode bits; backup=true saves the prior file as a sibling .bak before overwrite. "
         "Failures return error_code (already_exists, path_escape, not_a_file, not_a_directory, parent_missing, file_too_large, io_error) "
         "with a message instead of raising; nothing is written. "
-        "Response includes the workspace-relative path, created, overwritten, bytes and lines. "
+        "Response includes the workspace-relative path, created, overwritten, bytes and lines. Newly created Python files are post-processed and formatted; failures are reported and the file is kept. Python file responses also remind the agent to update requirements.txt if the file introduces third-party dependencies. "
+        "Successful HTML creates and overwrites are prettified with BeautifulSoup when possible, ensure static/html, static/js, and static/css exist, and return formatter status, separation guidance, and an HTML syntax check; formatting and syntax findings do not prevent the write. "
         "When to use: Add a new file; use apply_edits to modify existing files."
     ))(create_file)

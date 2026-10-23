@@ -184,7 +184,7 @@ def uri_to_path(uri: str) -> Path | None:
 
     path_str: str | None = None
     if scheme in ("vscode-remote", "cursor-remote", "windsurf-remote"):
-        # e.g. vscode-remote://wsl%2Bkali-linux/opt/handy_coder_mcp
+        # e.g. vscode-remote://wsl%2Bkali-linux/opt/handy-coder_mcp
         path_str = urllib.parse.unquote(parsed.path)
     elif scheme == "file":
         raw_path = urllib.parse.unquote(parsed.path)
@@ -379,10 +379,10 @@ def detect_working_dir(
 
     Order of evaluation:
     1. Explicit candidate from CLI / parameter (if not unexpanded variable and valid)
-    2. Explicit environment override HANDY_CODER_ROOT
+    2. Explicit environment override HANDY-CODER_ROOT
     3. IDE environment variables (VSCODE_WORKSPACE_FOLDER, etc.)
-    4. IDE detection + recovery from IDE settings & storage files
-    5. Current working directory (if not high-risk / system / user home root)
+    4. Current working directory (if not high-risk / system / user home root)
+    5. A unique workspace recovered from IDE storage
     6. Script directory fallback
     """
     # 1. Explicit candidate parameter
@@ -395,7 +395,7 @@ def detect_working_dir(
             return str(p.resolve())
 
     # 2. Explicit environment override
-    if root := os.environ.get("HANDY_CODER_ROOT", "").strip():
+    if root := os.environ.get("HANDY-CODER_ROOT", "").strip():
         if not root.startswith("${"):
             p = Path(root).expanduser()
             if p.is_dir() and not _is_vscode_process_dir(p):
@@ -415,38 +415,28 @@ def detect_working_dir(
                 if p.is_dir() and not _is_vscode_process_dir(p):
                     return str(p.resolve())
 
-    # 4. Identify the current IDE and recover working dir from IDE settings
-    ide = detect_ide()
-    recovered_roots = recover_workspace_roots(ide)
-
-    if recovered_roots:
-        # If script_dir matches or is nested inside one of the open workspaces, prefer that one
-        if script_dir:
-            try:
-                resolved_script = script_dir.resolve()
-                for root_path in recovered_roots:
-                    try:
-                        resolved_script.relative_to(root_path)
-                        return str(root_path)
-                    except ValueError:
-                        pass
-            except Exception:
-                pass
-
-        # Otherwise pick the first candidate (which represents the lastActiveWindow / most recent)
-        for root_path in recovered_roots:
-            if not _is_disallowed_default_root(root_path):
-                return str(root_path)
-            # If all are user roots, return the first valid directory anyway
-        return str(recovered_roots[0])
-
-    # 5. Check current working directory unless disallowed (e.g. VS Code process dir or Windows user home)
+    # 4. Prefer the process working directory. Unlike IDE storage, it belongs to
+    # this MCP process and is commonly set by the client's workspace launch config.
     try:
         cwd = Path.cwd().resolve()
         if cwd.is_dir() and not _is_disallowed_default_root(cwd):
             return str(cwd)
     except Exception:
         pass
+
+    # 5. Identify the current IDE and recover working dir from IDE settings.
+    # IDE storage is shared by windows, so it cannot associate a candidate with
+    # this process when multiple workspaces are open. Use it only when unique.
+    ide = detect_ide()
+    recovered_roots = recover_workspace_roots(ide)
+
+    if recovered_roots:
+        valid_roots = [p for p in recovered_roots if not _is_disallowed_default_root(p)]
+        if len(valid_roots) == 1:
+            return str(valid_roots[0])
+        # Multiple storage candidates have no reliable relationship to this
+        # process. Continue to the checkout fallback instead of guessing based
+        # on global window recency or workspace-storage ordering.
 
     # 6. Fall back to script checkout directory
     if script_dir and script_dir.is_dir():
