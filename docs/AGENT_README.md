@@ -181,11 +181,11 @@ Subagent tools provide a stable five-tool contract for delegated work without re
 - `subagent_complete`: closes a cooperative delegated frame.
 - `subagent_cancel`: cancels a task.
 
-Role tool access is scoped: `generalist`/`explorer` stay read-only, `reviewer` adds diagnostics/test execution, `planner`/`coder` can also use `create_file` + `apply_edits` when the task requires writing files, and `committer` can use `git_manage`.
+Role tool access is scoped: `generalist`/`explorer` stay read-only, `reviewer` adds diagnostics/test execution, `planner`/`coder` can also use `create_file` + `apply_edits` when the task requires writing files, and `committer` can use `git_manage`. Loop prompts include compact argument examples for the allowed tools. They also expose `subagent_status` and `subagent_result` so a loop can check and retrieve other task results when useful.
 
 Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, a model from your Continue config (on by default; `SUBAGENT_CONTINUE=0` turns it off), local Ollama when `SUBAGENT_LOCAL=1`, then no backend (`subagent_run` returns `unavailable`).
 
-Loop-capable backends (`sampling`, `direct:*`, `local:ollama`, `continue:<provider>`) run an internal JSON-action loop and can return `completed` directly from `subagent_run` when `wait: true` and the run finishes quickly; otherwise they return `running` and should be polled with `subagent_status`.
+Loop-capable backends (`sampling`, `direct:*`, `local:ollama`, `continue:<provider>`) run an internal JSON-action loop and can return `completed` directly from `subagent_run` when `wait: true` and the run finishes quickly; otherwise they return `running` and should be polled with `subagent_status`. The loop accepts JSON actions, text-wrapped Continue `<function_calls>` tool calls, and plain-text final answers. Wrapped tool calls are executed in order up to the role's tool-call budget; extra calls in that response are skipped and the model is asked to return its final answer.
 
 Optional overrides:
 

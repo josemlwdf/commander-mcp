@@ -49,12 +49,13 @@ _TOOL_ARGUMENTS = {
     "code_get_diagnostics": '{"path"?: "...", "check"?: "ruff", "timeout_ms"?: 30000}',
     "run_tests": '{"test_framework"?: "jest|pytest|vitest", "filter_path"?: "test/test_file.py", "fail_fast"?: false, "parallel"?: 1, "coverage"?: false, "verbose"?: false}',
     "defer_commit": '{"action"?: "defer|cancel|status", "reason"?: "why commit must wait", "calls"?: 5}',
-    "git_manage": '{"action": "status|diff|log|add|commit|push|pull|merge|rebase|checkout|branch|stash|blame|init", "args"?: ["..."], "repo_path"?: "...", "mode"?: "unstaged|staged|both", "file_paths"?: ["..."]}',
+    "git_manage": 'Use workspace-relative repo_path. Examples: {"action":"add","args":["task-owned.txt"],"repo_path":"."}; {"action":"commit","args":["-m","message"],"repo_path":"."}. For status use {"action":"status","repo_path":"."}.',
     "subagent_status": '{"task_id": "t_1"}',
     "subagent_result": '{"task_id": "t_1", "offset"?: 0}',
 }
 
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_FUNCTION_CALL_BLOCK = re.compile(r"<function_calls>\s*(.*?)\s*</function_calls>", re.DOTALL | re.IGNORECASE)
 
 
 def _strip_text(value: Any) -> str:
@@ -80,6 +81,28 @@ def _parse_json_action(text: str) -> dict[str, Any]:
     raw = (text or "").strip()
     if not raw:
         raise ValueError("model returned an empty response")
+
+    # Some Continue-compatible models emit native function-call wrappers as
+    # text. Collect their calls in order so the loop can return tool results in
+    # one completion cycle instead of making the model repeat its call list.
+    parsed_calls: list[dict[str, Any]] = []
+    for call_match in _FUNCTION_CALL_BLOCK.finditer(raw):
+        try:
+            calls = json.loads(call_match.group(1))
+        except ValueError:
+            continue
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            tool = call.get("tool")
+            args = call.get("args", {})
+            if isinstance(tool, str) and isinstance(args, dict):
+                parsed_calls.append({"tool": tool.strip(), "args": args})
+    if parsed_calls:
+        return {"kind": "tools", "calls": parsed_calls}
+
     try:
         data = json.loads(raw)
     except ValueError:
@@ -98,7 +121,7 @@ def _parse_json_action(text: str) -> dict[str, Any]:
     tool = data.get("tool")
     args = data.get("args", {})
     if isinstance(tool, str) and isinstance(args, dict):
-        return {"kind": "tool", "tool": tool.strip(), "args": args}
+        return {"kind": "tools", "calls": [{"tool": tool.strip(), "args": args}]}
 
     raise ValueError("model JSON must include either string key 'final' or 'tool' + object 'args'")
 
@@ -417,28 +440,42 @@ def run_loop(
                 raise RuntimeError("final result must not be empty")
             return final, turn, token_estimate
 
-        tool_calls += 1
-        if tool_calls > role.max_tool_calls:
+        calls = action["calls"]
+        remaining_calls = role.max_tool_calls - tool_calls
+        if remaining_calls <= 0:
             raise RuntimeError("tool-call budget exceeded")
+        skipped_calls = max(0, len(calls) - remaining_calls)
+        calls = calls[:remaining_calls]
+        for call in calls:
+            tool_calls += 1
+            tool_name = call["tool"]
+            if tool_name not in role.allowed_tools:
+                raise RuntimeError(f"tool '{tool_name}' is outside role allowlist")
+            _check_cancel(cancel_event)
+            tool_fn = _ALLOWED_TOOLS.get(tool_name)
+            if tool_fn is None:
+                tool_result: Any = {"error": "tool not available in loop backends"}
+            else:
+                tool_result = _call_tool(tool_fn, call["args"], tool_name=tool_name)
 
-        tool_name = action["tool"]
-        if tool_name not in role.allowed_tools:
-            raise RuntimeError(f"tool '{tool_name}' is outside role allowlist")
-        _check_cancel(cancel_event)
-        tool_fn = _ALLOWED_TOOLS.get(tool_name)
-        if tool_fn is None:
-            tool_result: Any = {"error": "tool not available in loop backends"}
-        else:
-            tool_result = _call_tool(tool_fn, action["args"], tool_name=tool_name)
-
-        history.append(
-            {
-                "role": "user",
-                "content": (
-                    f"Tool '{tool_name}' result JSON: {_json_preview(tool_result)}\n"
-                    "Continue. Return JSON only."
-                ),
-            }
-        )
+            history.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"Tool '{tool_name}' result JSON: {_json_preview(tool_result)}\n"
+                        "Continue. Return JSON only."
+                    ),
+                }
+            )
+        if skipped_calls:
+            history.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"The tool-call budget is exhausted; {skipped_calls} additional calls from the last "
+                        "response were skipped. Do not call any more tools; return your final result now."
+                    ),
+                }
+            )
 
     raise RuntimeError("max turns exceeded before final result")

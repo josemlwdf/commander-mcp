@@ -132,7 +132,10 @@ ROLES: dict[str, Role] = {
             "Review .gitignore and add missing rules for generated artifacts when needed. "
             "Stage only the changed files belonging to this task, write a concise commit message, "
             "and create the commit with git_manage. Never push. If the worktree includes unrelated "
-            "changes or the intended files cannot be identified safely, do not commit and report why."
+            "changes or the intended files cannot be identified safely, do not commit and report why. "
+            "Use git_manage repo_path as a workspace-relative path, normally '.'. For git add, pass "
+            "intended file paths in args, then verify staging with status. If a tool call returns an "
+            "error, read that result and correct the call before deciding the task is blocked."
         ),
         allowed_tools=(*_READ_ONLY_TOOLS, "defer_commit", "git_manage"),
         max_turns=8,

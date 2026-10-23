@@ -174,6 +174,41 @@ class HelperTests(unittest.TestCase):
             {"kind": "final", "text": "Here is the result in plain text."},
         )
 
+    def test_continue_function_call_wrapper_is_parsed(self):
+        action = loop._parse_json_action(
+            '<function_calls>\n[{"tool":"search_text","args":{"query":"needle"}}]\n</function_calls>'
+        )
+        self.assertEqual(action, {"kind": "tools", "calls": [{"tool": "search_text", "args": {"query": "needle"}}]})
+
+    def test_continue_function_call_blocks_are_collected_as_a_batch(self):
+        action = loop._parse_json_action(
+            '<function_calls>[{"tool":"find_files","args":{"glob_pattern":"*.py"}}]'
+            '</function_calls><function_calls>[{"tool":"read_files","args":{"paths":["README.md"]}}]'
+            '</function_calls>'
+        )
+        self.assertEqual(action['kind'], 'tools')
+        self.assertEqual([item['tool'] for item in action['calls']], ['find_files', 'read_files'])
+
+    def test_tool_call_batch_is_capped_at_role_budget(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+
+        role = replace(get_role('explorer'), max_tool_calls=1)
+        replies = iter([
+            '<function_calls>[{"tool":"read_files","args":{"paths":["README.md"]}},'
+            '{"tool":"read_files","args":{"paths":["docs/AGENT_README.md"]}}]</function_calls>',
+            '{"final":"- Evidence: read completed. Findings: none."}',
+        ])
+        calls = []
+
+        def sample(_system, messages, _max):
+            return next(replies)
+
+        with patch.object(loop, '_call_tool', side_effect=lambda fn, args, **kw: calls.append((fn, args)) or {'ok': True}):
+            result = loop.run_loop('sampling', role, 'review', None, None, sampling_fn=sample)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result[1], 2)
+
     def test_prompt_describes_tool_arguments_and_status_tools(self):
         from lib.subagents.roles import get_role
 

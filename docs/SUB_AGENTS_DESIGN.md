@@ -283,4 +283,12 @@ This addendum supersedes the sections above where they conflict.
 - **Loop write gate.** Loop backends run read-only roles. Roles that can write or commit need `SUBAGENT_LOOP_WRITE=1`, because loop tool calls run in a server thread with a deadline and are not isolated in the worker process.
 - **Cancel.** `subagent_cancel(confirm=true)` sets a per-task event that the loop checks each turn and before each tool call. An HTTP request already in flight still completes.
 
+## Continue loop interoperability notes
+
+- The loop prompt gives each allowed tool a compact argument example. For `apply_edits`, use `pattern` and `replacement` in each edit.
+- Some Continue-compatible models return tool calls inside textual `<function_calls>` blocks. The loop parses those calls in order and executes them within the role's tool-call budget; any excess calls from that response are skipped and the model is asked for a final answer.
+- A response that is not a recognized tool call or JSON action is accepted as plain-text final output. The role's result validator still runs before the task is marked complete.
+- Loop backends can call `subagent_status` and `subagent_result`, subject to each role's allowlist.
+- Write smoke checks confirmed workspace path escape rejection and that the commit gate blocks loop initiated writes while a commit is required. A disposable committer run staged and committed only the requested file, leaving an unrelated file unstaged.
+
 See `docs/AGENT_README.md` for the full list of environment variables.
