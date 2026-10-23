@@ -337,26 +337,30 @@ def _format_nudge(level: NudgeLevel, reason: NudgeReason | None, metrics: DiffMe
     if len(metrics.changed_files) > 8:
         files_preview += f", +{len(metrics.changed_files) - 8} more"
     prefix = "[commit-nudge: firm]" if level == "firm" else "[commit-nudge]"
+    state_line = (
+        f"{metrics.files} files / {metrics.lines} lines uncommitted since last commit "
+        f"({state.write_calls} write calls)."
+    )
+    options = "Options: git_manage action='commit' | defer_commit(reason)."
     if reason == "green":
         body = (
-            f"Tests/lint are green and you have {metrics.lines} uncommitted changed lines across "
-            f"{metrics.files} files. Consider committing this known-good checkpoint now."
+            f"Checkpoint commit policy: tests/lint are green and {state_line} "
+            f"This is a known-good checkpoint. {options}"
         )
     elif reason == "switch":
         body = (
-            f"You appear to be switching modules. Since last commit: {metrics.files} files, "
-            f"{metrics.lines} lines, {state.write_calls} write calls. Consider committing the previous module chunk first."
+            f"Checkpoint commit policy: module switch detected; {state_line} "
+            f"The previous module chunk is a commit boundary. {options}"
         )
     elif level == "firm":
         body = (
-            f"{metrics.files} files, {metrics.lines} lines changed since your last commit. "
-            "Please call git_manage with action='commit' now. "
-            "If you cannot commit yet, call defer_commit with a reason."
+            f"Checkpoint commit policy: firm limit reached; {state_line} "
+            f"{options}"
         )
     else:
         body = (
-            f"Since your last commit: {metrics.files} files, {metrics.lines} lines changed, "
-            f"{state.write_calls} write calls. Consider committing this chunk with git_manage action='commit'."
+            f"Checkpoint commit policy: soft threshold reached; {state_line} "
+            f"{options}"
         )
     if files_preview:
         body += f" Files: {files_preview}."
@@ -414,8 +418,6 @@ def _append_nudge(result: Any, level: NudgeLevel, reason: NudgeReason | None, me
         "task_id": task_id,
         "task_status": status,
     }
-    if isinstance(out.get("message"), str):
-        out["message"] = out["message"].rstrip() + "\n" + message
     return out
 
 

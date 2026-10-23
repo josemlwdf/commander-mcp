@@ -85,6 +85,42 @@ class CommitNudgeTests(unittest.TestCase):
         self.assertEqual(commit_nudge.STATE.write_calls, 1)
         self.assertIn("commit_nudge", written)
 
+    def test_parent_message_is_not_modified_by_nudge(self):
+        lines = "\n".join(f"line {i}" for i in range(90)) + "\n"
+        (self.root / "a.txt").write_text(lines, encoding="utf-8")
+
+        result = commit_nudge.after_tool_call(
+            "apply_edits",
+            {"edits": [{"path": "a.txt"}]},
+            {"edits": [{"path": "a.txt", "diff": ""}], "dry_run": False, "message": "edits applied"},
+        )
+
+        self.assertIn("commit_nudge", result)
+        self.assertEqual(result["message"], "edits applied")
+        self.assertNotIn("[commit-nudge", result["message"])
+
+    def test_nudge_text_is_policy_plus_state_for_every_reason(self):
+        metrics = commit_nudge.DiffMetrics(
+            lines=120, files=3, changed_files=["a.txt", "b.txt", "c.txt"], git_available=True
+        )
+        cases = (
+            ("soft", "threshold", "[commit-nudge]"),
+            ("soft", "switch", "[commit-nudge]"),
+            ("soft", "green", "[commit-nudge]"),
+            ("firm", "firm", "[commit-nudge: firm]"),
+        )
+        for level, reason, prefix in cases:
+            with self.subTest(level=level, reason=reason):
+                text = commit_nudge._format_nudge(level, reason, metrics, commit_nudge.STATE)
+                self.assertTrue(text.startswith(prefix), text)
+                self.assertIn("Checkpoint commit policy", text)
+                self.assertIn("git_manage", text)
+                self.assertIn("defer_commit", text)
+                self.assertIn("120 lines", text)
+                self.assertIn("3 files", text)
+                self.assertIn("Review .gitignore", text)
+                self.assertNotIn("Please call", text)
+
 
 if __name__ == "__main__":
     unittest.main()

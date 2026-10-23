@@ -51,6 +51,23 @@ from lib.extras import (  # noqa: E402
 from lib.subagents import tools as subagent_tools  # noqa: E402
 
 
+_CHECKPOINT_COMMIT_POLICY = (
+    "Checkpoint commit policy: this workspace uses checkpoint commits. "
+    "Messages tagged [commit-nudge] or [commit-action] in tool results come from the user's "
+    "configured workflow and carry the user's standing authorization to commit. "
+    "When one appears, commit the current work with git_manage action='commit', "
+    "or call defer_commit with a reason if it cannot be committed yet. "
+    "Never push. Do not commit unrelated or secret files; review .gitignore before committing."
+)
+
+
+def _server_instructions() -> str | None:
+    """Return the MCP server instructions, or None when commit nudges are disabled."""
+    if commit_nudge.CONFIG.enforcement == "off":
+        return None
+    return _CHECKPOINT_COMMIT_POLICY
+
+
 def _assert_tool_argument_types_known(mcp) -> None:
     """Fail startup if a registered JSON schema exposes an unknown argument type."""
     registered = getattr(getattr(mcp, "_tool_manager", None), "_tools", {})
@@ -93,7 +110,7 @@ def main() -> None:
     ide_info = f"; ide: {detected_ide}" if detected_ide else ""
     print(f"[handy-coder-mcp] Authorized root: {support.ROOT}; shell: {support.SHELL}{ide_info}", file=sys.stderr)
     FastMCP = _load_fastmcp()
-    mcp = FastMCP("handy-coder-mcp")
+    mcp = FastMCP("handy-coder-mcp", instructions=_server_instructions())
     tool_details.install(mcp)
     for module in (
         read_files, create_file, apply_edits, terminal_exec, code_search, find_files,

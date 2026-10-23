@@ -11,7 +11,7 @@ Use this skill when the user asks for an implementation plan or when the request
 ## Workflow
 
 1. Call `orchestrator_bootstrap` with the user's task and relevant context. It creates `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md`. It deletes any existing copies of those two files first, so if a previous plan or task list holds progress worth keeping, read it and save what you need before calling it.
-2. Start a `generalist` subagent to assess scope, assumptions, risks, and relevant project areas. Incorporate its findings into the implementation plan.
+2. Start a `generalist` subagent to assess scope, assumptions, risks, and relevant project areas. Incorporate its findings into the implementation plan. The `generalist` shall use the `grill-me` skill on the user to solve any ambiguities before start.
 3. Start a `planner` subagent with the task, generalist assessment, and relevant plan context. Ask it to produce small, actionable subtasks with clear completion criteria and dependencies.
 4. Review the breakdown. Keep tasks independent where possible: each should have a distinct outcome and bounded file ownership. Record prerequisites explicitly, avoid assigning concurrent edits to the same files, and combine tasks that cannot be safely separated. Replace the bootstrap placeholders in `tasks.md` with the reviewed tasks, preserving the `[ ] [status: non_started]` format.
 5. Spawn `coder` subagents to implement the tasks. Run independent tasks concurrently when their file ownership does not conflict; start dependent tasks only after their prerequisites are complete. Give each agent the relevant task, acceptance criteria, necessary context, and a reminder to report files changed and validation performed.

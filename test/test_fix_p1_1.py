@@ -93,6 +93,38 @@ class CommitNudgeTextOnlyTests(unittest.TestCase):
         self.assertIn("confirm=true", blocked["message"])
 
 
+    def _write_with_message(self, index: int) -> dict:
+        name = f"file{index}.txt"
+        (self.root / name).write_text("\n".join(f"line {i}" for i in range(40)) + "\n", encoding="utf-8")
+        return commit_nudge.after_tool_call(
+            "create_file",
+            {"path": name},
+            {"path": name, "created": True, "bytes": 1, "lines": 40, "message": "created ok"},
+        )
+
+    def test_text_only_nudge_leaves_parent_message_unchanged(self):
+        results = [self._write_with_message(index) for index in range(6)]
+        nudged = [r for r in results if "commit_nudge" in r]
+        self.assertTrue(nudged, "expected at least one text nudge")
+        for result in results:
+            self.assertEqual(result["message"], "created ok")
+        for result in nudged:
+            text = result["commit_nudge"]["message"]
+            self.assertIn("Checkpoint commit policy", text)
+            self.assertIn("git_manage", text)
+            self.assertIn("defer_commit", text)
+            self.assertNotIn("Please call", text)
+
+    def test_committer_nudge_leaves_parent_message_unchanged(self):
+        with patch.dict(os.environ, {"HANDY_CODER_COMMIT_SUBAGENT": "1"}):
+            results = [self._write_with_message(index) for index in range(3)]
+        nudged = [r for r in results if "commit_nudge" in r]
+        self.assertTrue(nudged, "expected at least one committer nudge")
+        for result in results:
+            self.assertEqual(result["message"], "created ok")
+        self.assertIsNotNone(nudged[0]["commit_nudge"]["task_id"])
+        self.assertIn("[commit-action]", nudged[0]["commit_nudge"]["message"])
+
     def test_unavailable_backend_falls_back_to_text_only_nudge(self):
         with patch.object(subagent_tools, "_COOP_EXPLICIT", False):
             with patch.dict(os.environ, {"HANDY_CODER_COMMIT_SUBAGENT": "1"}):
