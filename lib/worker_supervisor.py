@@ -20,6 +20,9 @@ _SEMAPHORE = threading.Semaphore(_CONCURRENT_WORKER_LIMIT)
 DEFAULT_WORKER_DEADLINE = 30.0  # seconds
 _NO_WORKER_TOOLS = {
     "defer_commit",
+    # This handler closes over the live FastMCP registry and is intentionally
+    # executed in-process; spawning it would re-import a non-module-level function.
+    "get_tool_details",
     "subagent_run",
     "subagent_status",
     "subagent_result",

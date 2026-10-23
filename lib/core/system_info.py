@@ -11,6 +11,8 @@ from ..subagents.resolve import resolve_backend
 from ..support import describe
 from ..subagents.roles import ROLES
 
+_MCP = None
+
 
 def _workspace_tool_available(name: str, *, python: bool = False) -> bool:
     """Check the same workspace-local tool locations used by code_format_lint."""
@@ -52,7 +54,7 @@ def get_capabilities() -> dict:
         "search_text":          {"available": True, "note": "uses Python re, supports regex or literal text"},
         "find_files":           {"available": True, "note": "always enabled"},
         "defer_commit":         {"available": True, "note": "temporarily snooze commit nudges"},
-        "skills_manage":        {"available": True, "note": "list, get, or save skills; directory override via HANDY-CODER_SKILLS_DIR"},
+        "skills_manage":        {"available": True, "note": "list, get, or save skills; directory override via HANDY_CODER_SKILLS_DIR"},
         "orchestrator_bootstrap": {"available": True, "note": "creates .handy-coder implementation-plan.md and tasks.md"},
         "orchestrator_update_task_status": {"available": True, "note": "atomically updates [status: ...] on one tasks.md line"},
         "run_tests":            {"available": pytest_ok, "note": "pytest binary" if not pytest_ok else "pytest found"},
@@ -79,6 +81,16 @@ def get_capabilities() -> dict:
         "subagent_cancel": {"available": True, "backend": subagent_backend, "note": "cancel task"},
     }
 
+    registry = getattr(getattr(_MCP, "_tool_manager", None), "_tools", {})
+    if isinstance(registry, dict) and registry:
+        # The registry is authoritative for exposure; retain per-tool capability
+        # metadata where available and add a minimal entry for every registered tool.
+        tools = {name: tools.get(name, {"available": True, "note": "registered MCP tool"})
+                 for name in registry}
+    else:
+        for name in ("web_search", "index_codebase", "code_navigator", "get_tool_details"):
+            tools.setdefault(name, {"available": True, "note": "registered MCP tool"})
+    tools.setdefault("get_capabilities", {"available": True, "note": "this capability endpoint"})
     return {
         # Read at call time: support.configure() rebinds support.ROOT after import.
         "workspace_root": str(support.ROOT),
@@ -92,6 +104,8 @@ def get_capabilities() -> dict:
 
 
 def register(mcp):
+    global _MCP
+    _MCP = mcp
     return mcp.tool(description=describe(
         "Return server health and capability status: which tools are available, "
         "which optional binaries and Python packages (git, ruff, black, eslint, jsbeautifier, pytest) are installed, "

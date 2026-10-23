@@ -37,6 +37,17 @@ class CommitNudgeTests(unittest.TestCase):
         self.assertIn("a.txt", metrics.changed_files)
         self.assertIn("b.txt", metrics.changed_files)
 
+    def test_preexisting_deleted_files_are_excluded_from_nudge_metrics(self):
+        (self.root / "preexisting-delete.txt").write_text("already removed\n")
+        subprocess.run(["git", "add", "preexisting-delete.txt"], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "-m", "add file", "--quiet"], cwd=self.root, check=True)
+        (self.root / "preexisting-delete.txt").unlink()
+        commit_nudge._reset_for_tests()
+        commit_nudge._ensure_cycle_initialized(commit_nudge.STATE)
+        metrics = commit_nudge.measure_diff(exclude_paths=commit_nudge.STATE.baseline_deleted_files)
+        self.assertNotIn("preexisting-delete.txt", metrics.changed_files)
+        self.assertEqual(metrics.lines, 0)
+
     def test_soft_nudge_added_after_threshold(self):
         lines = "\n".join(f"line {i}" for i in range(90)) + "\n"
         (self.root / "a.txt").write_text(lines, encoding="utf-8")

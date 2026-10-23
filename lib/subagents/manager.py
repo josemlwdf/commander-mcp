@@ -168,6 +168,8 @@ class SubagentManager:
             text = task.result or ""
             if offset < 0:
                 raise ValueError("offset must be >= 0")
+            if offset > len(text):
+                raise ValueError(f"offset {offset} exceeds result length {len(text)}")
             page = text[offset:offset + self.limits.result_page_chars]
             next_offset = offset + self.limits.result_page_chars
             if next_offset >= len(text):

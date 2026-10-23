@@ -14,7 +14,7 @@ from ..support import describe, inside
 Status = Literal["non_started", "interrupted", "complete", "failed"]
 
 _STATUS_LINE_RE = re.compile(
-    r"^(?P<prefix>\s*-\s*\[\s*[ xX]?\s*\]\s*\[status:\s*)(?P<status>non_started|interrupted|complete|failed)(?P<suffix>\s*\].*)$"
+    r"^(?P<prefix>\s*-\s*\[\s*(?P<checkbox>[ xX]?)\s*\]\s*\[status:\s*)(?P<status>non_started|interrupted|complete|failed)(?P<suffix>\s*\].*)$"
 )
 
 
@@ -110,7 +110,8 @@ def orchestrator_update_task_status(
         )
 
     previous_status = match.group("status")
-    if previous_status == status:
+    checkbox = "x" if status == "complete" else " "
+    if previous_status == status and match.group("checkbox").lower() == checkbox:
         return {
             "updated": False,
             "line_number": target_index + 1,
@@ -118,7 +119,8 @@ def orchestrator_update_task_status(
             "message": "Selected task already has the requested status.",
         }
 
-    lines[target_index] = f"{match.group('prefix')}{status}{match.group('suffix')}"
+    prefix = re.sub(r"\[\s*[ xX]?\s*\]", f"[{checkbox}]", match.group("prefix"), count=1)
+    lines[target_index] = f"{prefix}{status}{match.group('suffix')}"
     new_text = "\n".join(lines)
     if text.endswith("\n"):
         new_text += "\n"

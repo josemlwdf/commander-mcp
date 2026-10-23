@@ -59,6 +59,7 @@ class DiffMetrics:
 @dataclass
 class CommitTrackerState:
     base_head: str | None = None
+    baseline_deleted_files: set[str] = field(default_factory=set)
     write_calls: int = 0
     payload_chars: int = 0
     last_nudge_at_call: int = 0
@@ -183,7 +184,7 @@ def _count_text_lines(path: Path) -> int:
     return len(text.splitlines())
 
 
-def measure_diff() -> DiffMetrics:
+def measure_diff(*, exclude_paths: set[str] | None = None) -> DiffMetrics:
     root = inside(".")
     if not _git_ok():
         return DiffMetrics(lines=0, files=0, changed_files=[], git_available=False)
@@ -198,7 +199,7 @@ def measure_diff() -> DiffMetrics:
             if len(parts) < 3:
                 continue
             added, removed, path = parts[0], parts[1], parts[2]
-            if _is_ignored(path):
+            if _is_ignored(path) or path in (exclude_paths or set()):
                 continue
             changed_files.add(path)
             if added.isdigit() and removed.isdigit():
@@ -270,6 +271,7 @@ def _evaluate(metrics: DiffMetrics, state: CommitTrackerState) -> tuple[NudgeLev
 
 def _reset_cycle(state: CommitTrackerState) -> None:
     state.base_head = _current_head()
+    state.baseline_deleted_files = _deleted_paths_at_baseline()
     state.write_calls = 0
     state.payload_chars = 0
     state.last_nudge_at_call = 0
@@ -289,10 +291,21 @@ def _reset_cycle(state: CommitTrackerState) -> None:
 def _ensure_cycle_initialized(state: CommitTrackerState) -> None:
     if state.base_head is None:
         state.base_head = _current_head()
+        state.baseline_deleted_files = _deleted_paths_at_baseline()
         return
     head = _current_head()
     if head and state.base_head and head != state.base_head:
         _reset_cycle(state)
+
+
+def _deleted_paths_at_baseline() -> set[str]:
+    if not _git_ok():
+        return set()
+    status = run_process(["git", "diff", "--name-status", "HEAD"], cwd=inside("."))
+    if status.get("exit_code") != 0:
+        return set()
+    return {parts[-1] for line in status.get("stdout", "").splitlines()
+            if (parts := line.split("\t")) and parts[0] == "D" and len(parts) >= 2}
 
 
 def _record_touch(state: CommitTrackerState, touched_files: list[str]) -> None:
@@ -415,7 +428,7 @@ def before_tool_call(tool_name: str, args: dict[str, Any]) -> dict | None:
             return None
         if not STATE.gate_block_next_write:
             return None
-        metrics = measure_diff()
+        metrics = measure_diff(exclude_paths=STATE.baseline_deleted_files)
         if not _hard_limit_exceeded(metrics):
             STATE.gate_block_next_write = False
             STATE.gate_rejections_in_row = 0
@@ -470,7 +483,7 @@ def after_tool_call(tool_name: str, args: dict[str, Any], result: Any) -> Any:
             STATE.last_check_status = "none"
             return result
 
-        metrics = measure_diff()
+        metrics = measure_diff(exclude_paths=STATE.baseline_deleted_files)
         level, reason = _evaluate(metrics, STATE)
 
         if CONFIG.enforcement == "gate" and not _is_merge_or_rebase_in_progress() and _hard_limit_exceeded(metrics):

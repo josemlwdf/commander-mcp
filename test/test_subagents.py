@@ -79,7 +79,7 @@ class SubagentToolTests(unittest.TestCase):
             task_id=task_id,
             result="- finding: README exists\n- conclusion: docs are present",
         )
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["state"], "done")
         page = self.mcp.tools["subagent_result"](task_id=task_id)
         self.assertIn("README", page["result"])
 

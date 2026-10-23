@@ -153,7 +153,10 @@ def subagent_run(
 def subagent_status(
     task_id: Annotated[str, Field(description="Task identifier returned by subagent_run.")],
 ) -> dict:
-    task_obj = _MANAGER.get_task(task_id)
+    try:
+        task_obj = _MANAGER.get_task(task_id)
+    except ValueError:
+        return {"error_code": "unknown_task_id", "task_id": task_id, "message": "No task exists with this task_id."}
     payload = {
         "task_id": task_obj.task_id,
         "state": task_obj.state,
@@ -169,16 +172,26 @@ def subagent_result(
     task_id: Annotated[str, Field(description="Task identifier returned by subagent_run.")],
     offset: Annotated[int | None, Field(ge=0, description="Optional 0-based character offset for paging long results.")] = None,
 ) -> dict:
-    return _MANAGER.get_result_page(task_id, int(offset or 0))
+    try:
+        return _MANAGER.get_result_page(task_id, int(offset or 0))
+    except ValueError as exc:
+        if "Unknown task_id" in str(exc):
+            return {"error_code": "unknown_task_id", "task_id": task_id, "message": "No task exists with this task_id."}
+        return {"error_code": "invalid_range", "task_id": task_id, "message": str(exc)}
 
 
 def subagent_complete(
     task_id: Annotated[str, Field(description="Open delegated task id to complete in cooperative mode.")],
     result: Annotated[str, Field(max_length=100000, description="Final subagent result text, at most 100,000 characters. Keep it concise or page supporting detail with subagent_result. Must match the role's expected output format.")],
 ) -> dict:
-    task_obj = _MANAGER.get_task(task_id)
+    try:
+        task_obj = _MANAGER.get_task(task_id)
+    except ValueError:
+        return {"error_code": "unknown_task_id", "task_id": task_id, "message": "No task exists with this task_id."}
     if task_obj.backend != "cooperative":
-        raise ValueError("subagent_complete is only valid for cooperative mode tasks")
+        return {"error_code": "task_not_active", "task_id": task_id, "message": "subagent_complete is only valid for an active cooperative task."}
+    if task_obj.state != "delegated":
+        return {"error_code": "task_not_active", "task_id": task_id, "state": task_obj.state, "message": "The cooperative task is not active."}
     role = get_role(task_obj.role)
     if role is None:
         raise ValueError(f"Unknown role on task: {task_obj.role}")
@@ -190,7 +203,7 @@ def subagent_complete(
     digest = hashlib.sha1(result.encode("utf-8")).hexdigest()[:10]
     first_line = result.strip().splitlines()[0] if result.strip() else ""
     return {
-        "status": "completed",
+        "state": done.state,
         "task_id": done.task_id,
         "backend": done.backend,
         "digest": f"{digest}: {first_line[:180]}",
@@ -203,13 +216,20 @@ def subagent_cancel(
     reason: Annotated[str | None, Field(max_length=2000, description="Optional cancellation reason recorded with the task.")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm cancellation; false returns a confirmation-required response.")] = False,
 ) -> dict:
+    try:
+        _MANAGER.get_task(task_id)
+    except ValueError:
+        return {"error_code": "unknown_task_id", "task_id": task_id, "message": "No task exists with this task_id."}
     if not confirm:
         return {"task_id": task_id, "cancelled": False, "confirmation_required": True, "message": "Call again with confirm=true to cancel this task."}
     if thread := _THREADS.get(task_id):
         if thread.is_alive():
             # Cancellation is cooperative: mark task and let running call end naturally.
             pass
-    task_obj = _MANAGER.cancel_task(task_id, reason=reason)
+    try:
+        task_obj = _MANAGER.cancel_task(task_id, reason=reason)
+    except KeyError:
+        return {"error_code": "unknown_task_id", "task_id": task_id, "message": "No task exists with this task_id."}
     return {
         "task_id": task_obj.task_id,
         "state": task_obj.state,
