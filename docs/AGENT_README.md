@@ -161,7 +161,7 @@ Names must be 1-64 characters of lowercase letters, digits and hyphens, which al
 
 Subagent tools provide a stable five-tool contract for delegated work without requiring any new credentials. `get_capabilities` reports each role's allowed tools, tool-call budget, and result format. `subagent_result` pages results using `offset`, `total_length`, and `next_offset`; `subagent_cancel` requires `confirm: true`. Cooperative frames expire after five minutes. The host completes cooperative tasks with `subagent_complete`; a successful `git_manage` commit by a committer closes its frame automatically, while skipped or unsuccessful commits and other roles still require `subagent_complete`. Streaming and checkpoint/resume are unsupported.
 
-- `subagent_run`: starts a task with a role (`generalist`, `coder`, `committer`, `explorer`, `reviewer`, or `planner`) and returns one of three statuses: `completed`, `running`, or `delegated_to_host`.
+- `subagent_run`: starts a task with a role (`generalist`, `coder`, `committer`, `explorer`, `reviewer`, or `planner`) and returns `completed`, `running`, `delegated_to_host` (only with an explicit `SUBAGENT_BACKEND=cooperative`) or `unavailable`. `unavailable` means no subagent backend exists: nothing is started, no task id is created and no frame is opened, so the parent should do the work itself and not retry.
 - `subagent_status`: checks the current task state and usage.
 - `subagent_result`: fetches the full or paged result text.
 - `subagent_complete`: closes a cooperative delegated frame.
@@ -169,18 +169,34 @@ Subagent tools provide a stable five-tool contract for delegated work without re
 
 Role tool access is scoped: `generalist`/`explorer` stay read-only, `reviewer` adds diagnostics/test execution, `planner`/`coder` can also use `create_file` + `apply_edits` when the task requires writing files, and `committer` can use `git_manage`.
 
-Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, local Ollama when `SUBAGENT_LOCAL=1`, then `cooperative`.
+Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, a model from your Continue config when `SUBAGENT_CONTINUE=1`, local Ollama when `SUBAGENT_LOCAL=1`, then no backend (`subagent_run` returns `unavailable`).
 
-Loop-capable backends (`sampling`, `direct:*`, `local:ollama`) run an internal JSON-action loop and can return `completed` directly from `subagent_run` when `wait: true` and the run finishes quickly; otherwise they return `running` and should be polled with `subagent_status`.
+Loop-capable backends (`sampling`, `direct:*`, `local:ollama`, `continue:<provider>`) run an internal JSON-action loop and can return `completed` directly from `subagent_run` when `wait: true` and the run finishes quickly; otherwise they return `running` and should be polled with `subagent_status`.
 
 Optional overrides:
 
-- `SUBAGENT_BACKEND=cooperative|sampling|direct|local` chooses the backend family.
+- `SUBAGENT_BACKEND=cooperative|sampling|direct|local|continue` chooses the backend family. `continue` is its own opt-in and does not need `SUBAGENT_CONTINUE=1`; if no Continue model is usable it resolves to no backend.
+- `SUBAGENT_CONTINUE=1` lets `auto` selection use a model from your Continue config (see below). Any other value leaves it off.
+- `SUBAGENT_CONTINUE_MODEL` picks a Continue model by `name` or `model` (case-insensitive). An unknown value selects nothing; it never falls back to another model.
+- `SUBAGENT_CONTINUE_CONFIG` points at a specific Continue config file and is searched first.
+- `SUBAGENT_LOOP_WRITE=1` lets loop backends run roles that can write or commit (`planner`, `coder`, `committer`). Without it `subagent_run` returns `unavailable` for those roles.
 - `SUBAGENT_WAIT_SECONDS` controls the synchronous wait budget for `subagent_run` (default 15).
 - `SUBAGENT_MODEL_OPENAI`, `SUBAGENT_MODEL_ANTHROPIC`, `SUBAGENT_MODEL_LOCAL` override default model ids per backend.
 - `SUBAGENT_SAMPLING_URL` (plus optional `SUBAGENT_SAMPLING_MODEL` and `SUBAGENT_SAMPLING_API_KEY`) enables HTTP sampling in runtimes without a native sampling bridge.
 
-Use subagents for broad searches, independent reviews, and large-input summaries; avoid delegation only for single quick lookups. In practice, prefer an orchestrator-first style: keep parent context minimal and delegate most non-trivial work to subagents.
+Use subagents for broad searches, independent reviews, and large-input summaries; avoid delegation only for single quick lookups. In practice, prefer an orchestrator-first style while `subagent_run` is available: keep parent context minimal and delegate non-trivial work to subagents. When it returns `unavailable`, do the work yourself in the conversation.
+
+#### Continue backend
+
+With `SUBAGENT_CONTINUE=1` (or `SUBAGENT_BACKEND=continue`) the server reuses a chat model from your [Continue](https://continue.dev) config, so you do not configure a second set of credentials. Config files are searched in this order: `SUBAGENT_CONTINUE_CONFIG`, `$CONTINUE_GLOBAL_DIR/config.yaml`, `~/.continue/config.yaml`, `~/.continue/config.json`, `/mnt/c/Users/<current user>/.continue/` when running under WSL (current user only), `%USERPROFILE%\.continue\`, then `<workspace>/.continue/config.yaml`. Files over 1 MiB are skipped.
+
+- **Cost:** this spends your own provider credits or hits your own local model. Loops can take several turns per task, so the cost is not one request.
+- **Models:** only entries with the `chat` role (or no `roles`) and a supported provider are used: `openai`, `anthropic`, `openrouter`, `deepseek`, `mistral`, `groq`, `together`, `lmstudio`, `ollama`. Hub entries (`uses:`), other providers and remote models without a resolvable key are skipped.
+- **Keys:** a literal `apiKey`, an `Authorization` header under `requestOptions.headers`, or a `${{ secrets.NAME }}` reference resolved from the process environment, then from a `.env` next to the config file. Whether Continue itself reads that `.env` is unverified. Anthropic keys are sent as `x-api-key`.
+- **Workspace configs are untrusted:** `<workspace>/.continue/config.yaml` can be shipped by a repository, so `${{ secrets.* }}` references in it are never resolved. Literal keys in it still work.
+- **Secrets stay out of output:** keys and header values are redacted from error text (backend HTTP errors and failed-task messages), and `get_capabilities` reports only the provider, model name and config path. The text of a completed task's result is the model's own output and is not scrubbed, so a key can appear there if the model obtains it some other way, for example by reading a workspace `.continue/config.yaml` that contains a literal key with `read_files`. Prefer `${{ secrets.NAME }}` references or a config outside the workspace.
+- **YAML needs PyYAML:** install it with `pip install .[continue]`. Without it YAML configs are skipped and only JSON configs work.
+- **Limits:** loop tool calls run in a server thread with a 60-second deadline and are not isolated in the worker process. `subagent_cancel` stops a task before its next turn or tool call, but an HTTP request already in flight still finishes. A model's `maxTokens` only lowers the per-request limit, never raises it.
 
 ### Orchestrator bootstrap
 

@@ -385,6 +385,9 @@ def _append_nudge(result: Any, level: NudgeLevel, reason: NudgeReason | None, me
             deliverable="Report only whether a commit was made, its short hash and message, or why it was skipped.",
             wait=False,
         )
+        if task.get("status") == "unavailable":
+            # No subagent backend: nothing started, so fall back to the text-only nudge.
+            raise _CommitterDisabled()
         task_id = task.get("task_id")
         status = task.get("status", "failed")
         message = (

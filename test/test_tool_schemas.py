@@ -166,8 +166,11 @@ class ToolSchemaTests(unittest.TestCase):
     def test_subagent_and_orchestrator_descriptions_encourage_delegation(self):
         subagent_desc = self.mcp.descriptions["subagent_run"].lower()
         bootstrap_desc = self.mcp.descriptions["orchestrator_bootstrap"].lower()
-        self.assertIn("orchestration-first", subagent_desc)
+        # The description must not promise delegation unconditionally: it has to
+        # explain that subagent_run can return status unavailable.
         self.assertIn("delegate", subagent_desc)
+        self.assertIn("unavailable", subagent_desc)
+        self.assertIn("do the work yourself", subagent_desc)
         self.assertIn("orchestrator-first", bootstrap_desc)
         self.assertIn("subagent", bootstrap_desc)
 

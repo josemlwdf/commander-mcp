@@ -10,7 +10,7 @@ from pydantic import Field
 from ..support import describe
 from . import loop
 from .manager import SubagentManager
-from .resolve import resolve_backend
+from .resolve import resolve_backend, resolve_continue
 from .roles import Role, get_role, role_names
 
 
@@ -19,13 +19,19 @@ _BACKEND = "cooperative"
 _CLIENT_CAPABILITIES: dict[str, Any] | None = None
 _SAMPLING_CALLBACK = None
 _THREADS: dict[str, threading.Thread] = {}
+_CANCEL_EVENTS: dict[str, threading.Event] = {}
+# Cooperative frames (delegated_to_host) open only for an explicit
+# SUBAGENT_BACKEND=cooperative. When no backend resolves, subagent_run returns
+# status "unavailable" and opens no frame and creates no task.
+_COOP_EXPLICIT = False
 
 
 def configure_runtime(*, client_capabilities: dict[str, Any] | None = None, sampling_callback=None) -> None:
-    global _BACKEND, _CLIENT_CAPABILITIES, _SAMPLING_CALLBACK
+    global _BACKEND, _CLIENT_CAPABILITIES, _SAMPLING_CALLBACK, _COOP_EXPLICIT
     _CLIENT_CAPABILITIES = client_capabilities
     _SAMPLING_CALLBACK = sampling_callback
     _BACKEND = resolve_backend(client_capabilities)
+    _COOP_EXPLICIT = os.environ.get("SUBAGENT_BACKEND", "").strip().lower() == "cooperative"
 
 
 def _backend() -> str:
@@ -66,8 +72,16 @@ def _wait_seconds() -> float:
 
 
 def _loop_runner(task_id: str, role_obj: Role) -> None:
+    secrets: list[str] = []
     try:
         task_obj = _MANAGER.start_task(task_id)
+        continue_model = None
+        if task_obj.backend.startswith("continue:"):
+            resolved = resolve_continue()
+            if resolved is None:
+                raise RuntimeError("continue backend is no longer available")
+            continue_model = resolved.model
+            secrets = [continue_model.api_key or "", *continue_model.headers.values()]
         result, turns, tokens = loop.run_loop(
             task_obj.backend,
             role_obj,
@@ -75,18 +89,24 @@ def _loop_runner(task_id: str, role_obj: Role) -> None:
             task_obj.context,
             task_obj.deliverable,
             sampling_fn=_SAMPLING_CALLBACK,
+            continue_model=continue_model,
+            cancel_event=_CANCEL_EVENTS.get(task_id),
         )
         invalid = role_obj.validator(result)
         if invalid:
             raise ValueError(invalid)
         _MANAGER.complete_task(task_id, result, turns=turns, tokens=tokens)
+    except loop.SubagentCancelled:
+        pass  # task state was already set to cancelled by subagent_cancel
     except Exception as exc:  # noqa: BLE001
-        _MANAGER.fail_task(task_id, str(exc))
+        _MANAGER.fail_task(task_id, loop._redact(exc, secrets))
     finally:
         _THREADS.pop(task_id, None)
+        _CANCEL_EVENTS.pop(task_id, None)
 
 
 def _launch_loop(task_id: str, role_obj: Role) -> None:
+    _CANCEL_EVENTS[task_id] = threading.Event()
     thread = threading.Thread(target=_loop_runner, args=(task_id, role_obj), daemon=True, name=f"subagent-{task_id}")
     _THREADS[task_id] = thread
     thread.start()
@@ -122,12 +142,26 @@ def subagent_run(
     task: Annotated[str, Field(description="Task for the subagent to perform in isolation from the parent flow.")],
     context: Annotated[str | None, Field(description="Optional context to pass to the subagent, such as branch, files, or constraints.")] = None,
     deliverable: Annotated[str | None, Field(description="Optional explicit deliverable format for the subagent result.")] = None,
-    wait: Annotated[bool, Field(description="When true (default), wait for completion when the backend can finish quickly. Cooperative mode always delegates to host.")] = True,
+    wait: Annotated[bool, Field(description="When true (default), wait for completion when the backend can finish quickly. Without a usable backend the result is status unavailable; explicit cooperative mode delegates to the host.")] = True,
 ) -> dict:
     selected_backend = _backend()
     role_obj = get_role(role)
     if role_obj is None:
         raise ValueError(f"Unknown role '{role}'. Available roles: {_available_roles_text()}")
+
+    if selected_backend == "cooperative" and not _COOP_EXPLICIT:
+        return {
+            "status": "unavailable",
+            "backend": "cooperative",
+            "message": "No subagent LLM available; continue the task yourself in this conversation.",
+        }
+    can_write = any(t in role_obj.allowed_tools for t in loop.LOOP_WRITE_TOOLS)
+    if selected_backend != "cooperative" and can_write and os.environ.get("SUBAGENT_LOOP_WRITE") != "1":
+        return {
+            "status": "unavailable",
+            "backend": selected_backend,
+            "message": f"Role '{role_obj.name}' can write files and loop backends are read-only unless SUBAGENT_LOOP_WRITE=1; do this step yourself in this conversation.",
+        }
 
     task_obj = _MANAGER.create_task(role, task, selected_backend, context, deliverable)
 
@@ -222,10 +256,10 @@ def subagent_cancel(
         return {"error_code": "unknown_task_id", "task_id": task_id, "message": "No task exists with this task_id."}
     if not confirm:
         return {"task_id": task_id, "cancelled": False, "confirmation_required": True, "message": "Call again with confirm=true to cancel this task."}
-    if thread := _THREADS.get(task_id):
-        if thread.is_alive():
-            # Cancellation is cooperative: mark task and let running call end naturally.
-            pass
+    event = _CANCEL_EVENTS.get(task_id)
+    if event is not None:
+        # Checked by run_loop each turn and before each tool call; an in-flight HTTP call still finishes.
+        event.set()
     try:
         task_obj = _MANAGER.cancel_task(task_id, reason=reason)
     except KeyError:
@@ -290,10 +324,10 @@ def register(mcp):
     configure_runtime(client_capabilities=None)
     base = (
         "Delegate multi-step work to an internal subagent contract with stable status shapes. "
-        "Default to orchestration-first behavior: keep parent context minimal and delegate analysis, planning, implementation, and review to subagents whenever a task is not a single quick lookup. "
-        "Use this especially for broad searches, independent reviews, summaries of large inputs, and any change touching multiple files or steps. "
+        "A subagent runs only when a backend is available: client sampling, a provider key in the environment, or a model from the user's Continue config when SUBAGENT_CONTINUE=1. Without one, subagent_run returns status unavailable and creates no task. "
+        "Loop backends run read-only roles; roles that can write (planner, coder, committer) need SUBAGENT_LOOP_WRITE=1. Use subagents for broad searches, independent reviews and summaries of large inputs when available. "
         "When status is completed, consume result; when running, poll subagent_status; "
-        "when delegated_to_host, follow instructions then call subagent_complete. Cooperative tasks expire after five minutes; successful git_manage commits by a committer close that frame automatically, while skipped or unsuccessful commits and other roles require subagent_complete. Streaming and checkpoint/resume are unsupported. Roles: generalist/explorer are read-only, reviewer adds diagnostics/tests, planner can also create/edit, coder can create/edit plus diagnostics/tests. Result pages include offset, total_length, and next_offset metadata. The commit nudge starts a committer subagent only when HANDY_CODER_COMMIT_SUBAGENT=1 (off by default). An open frame blocks tools outside its role allowlist; recover with subagent_complete or subagent_cancel(confirm=true)."
+        "when unavailable, do the work yourself in this conversation and do not retry; when delegated_to_host (explicit SUBAGENT_BACKEND=cooperative only, scoped role mode), follow instructions then call subagent_complete. Cooperative tasks expire after five minutes; successful git_manage commits by a committer close that frame automatically, while skipped or unsuccessful commits and other roles require subagent_complete. Streaming and checkpoint/resume are unsupported. Roles: generalist/explorer are read-only, reviewer adds diagnostics/tests, planner can also create/edit, coder can create/edit plus diagnostics/tests. Result pages include offset, total_length, and next_offset metadata. The commit nudge starts a committer subagent only when HANDY_CODER_COMMIT_SUBAGENT=1 (off by default). An open frame blocks tools outside its role allowlist; recover with subagent_complete or subagent_cancel(confirm=true)."
     )
     mcp.tool(description=describe(base + " Start a task."))(subagent_run)
     mcp.tool(description=describe(base + " Check task state and usage."))(subagent_status)

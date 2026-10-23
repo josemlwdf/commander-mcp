@@ -3,13 +3,17 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any, Callable
+import threading
+from typing import TYPE_CHECKING, Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from ..core import apply_edits, code_search, create_file, diagnostics, find_files, read_files, run_tests
 from ..core import git_manage
 from .roles import Role
+
+if TYPE_CHECKING:
+    from .continue_config import ContinueModel
 
 ToolFn = Callable[..., dict]
 SamplingFn = Callable[[str, list[dict[str, str]], int], str]
@@ -82,8 +86,17 @@ def _json_preview(payload: Any, limit: int = 5000) -> str:
     return text[: limit - 3] + "..."
 
 
-def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float = 35.0) -> dict[str, Any]:
+def _redact(text: Any, secrets: Any = ()) -> str:
+    out = str(text)
+    for secret in secrets:
+        if isinstance(secret, str) and len(secret) >= 4:
+            out = out.replace(secret, "[redacted]")
+    return out
+
+
+def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float = 35.0, secrets: Any = ()) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
+    hidden = [*secrets, *headers.values()]
     req = Request(url, data=body, method="POST")
     for key, value in headers.items():
         req.add_header(key, value)
@@ -93,17 +106,37 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
             text = resp.read().decode("utf-8", "replace")
     except HTTPError as exc:
         details = exc.read().decode("utf-8", "replace") if hasattr(exc, "read") else ""
-        raise RuntimeError(f"HTTP {exc.code} from backend: {details[:300]}") from exc
+        raise RuntimeError(_redact(f"HTTP {exc.code} from backend: {details[:300]}", hidden)) from None
     except URLError as exc:
-        raise RuntimeError(f"Backend connection failed: {exc}") from exc
+        raise RuntimeError(_redact(f"Backend connection failed: {exc}", hidden)) from None
 
     try:
         return json.loads(text)
-    except ValueError as exc:
-        raise RuntimeError("Backend returned non-JSON response") from exc
+    except ValueError:
+        raise RuntimeError("Backend returned non-JSON response") from None
 
 
-def _complete_openai_compatible(base_url: str, model: str, api_key: str | None, system_prompt: str, messages: list[dict[str, str]], max_tokens: int) -> str:
+CONTINUE_OPENAI_COMPATIBLE_BASES: dict[str, str] = {
+    "openai": "https://api.openai.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "mistral": "https://api.mistral.ai/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "together": "https://api.together.xyz/v1",
+    "lmstudio": "http://127.0.0.1:1234/v1",
+    "ollama": "http://127.0.0.1:11434/v1",
+}
+
+
+def continue_provider_supported(provider: str) -> bool:
+    return provider in CONTINUE_OPENAI_COMPATIBLE_BASES or provider == "anthropic"
+
+
+def _has_header(headers: dict[str, str], name: str) -> bool:
+    return any(key.lower() == name for key in headers)
+
+
+def _complete_openai_compatible(base_url: str, model: str, api_key: str | None, system_prompt: str, messages: list[dict[str, str]], max_tokens: int, *, headers: dict[str, str] | None = None, timeout: float | None = None) -> str:
     prompt_messages = [{"role": "system", "content": system_prompt}] + messages
     payload = {
         "model": model,
@@ -111,11 +144,17 @@ def _complete_openai_compatible(base_url: str, model: str, api_key: str | None, 
         "temperature": 0,
         "max_tokens": max_tokens,
     }
-    headers = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    merged = dict(headers or {})
+    if api_key and not _has_header(merged, "authorization"):
+        merged["Authorization"] = f"Bearer {api_key}"
     base = base_url.rstrip("/")
-    data = _post_json(f"{base}/chat/completions", payload, headers)
+    data = _post_json(
+        f"{base}/chat/completions",
+        payload,
+        merged,
+        timeout if timeout is not None else 35.0,
+        [api_key] if api_key else [],
+    )
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError("OpenAI-compatible backend returned no choices")
@@ -123,19 +162,40 @@ def _complete_openai_compatible(base_url: str, model: str, api_key: str | None, 
     return _strip_text(message.get("content"))
 
 
-def _complete_anthropic(api_key: str, system_prompt: str, messages: list[dict[str, str]], max_tokens: int) -> str:
+def _anthropic_url(base_url: str | None) -> str:
+    if not base_url:
+        return "https://api.anthropic.com/v1/messages"
+    base = base_url.rstrip("/")
+    return base + ("/messages" if base.endswith("/v1") else "/v1/messages")
+
+
+def _complete_anthropic(api_key: str, system_prompt: str, messages: list[dict[str, str]], max_tokens: int, *, model: str | None = None, base_url: str | None = None, headers: dict[str, str] | None = None, timeout: float | None = None) -> str:
     payload = {
-        "model": os.environ.get("SUBAGENT_MODEL_ANTHROPIC", "claude-3-5-haiku-latest"),
+        "model": model or os.environ.get("SUBAGENT_MODEL_ANTHROPIC", "claude-3-5-haiku-latest"),
         "max_tokens": max_tokens,
         "system": system_prompt,
         "messages": messages,
     }
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
-    data = _post_json("https://api.anthropic.com/v1/messages", payload, headers)
+    merged = {k: v for k, v in (headers or {}).items() if k.lower() not in {"authorization", "x-api-key"}}
+    merged["x-api-key"] = api_key
+    merged["anthropic-version"] = "2023-06-01"
+    data = _post_json(
+        _anthropic_url(base_url),
+        payload,
+        merged,
+        timeout if timeout is not None else 35.0,
+        [api_key],
+    )
     return _strip_text(data.get("content"))
+
+
+def _continue_base_url(provider: str, api_base: str | None) -> str:
+    if not api_base:
+        return CONTINUE_OPENAI_COMPATIBLE_BASES[provider]
+    base = api_base.rstrip("/")
+    if provider in {"ollama", "lmstudio"} and not base.endswith("/v1"):
+        base += "/v1"
+    return base
 
 
 def _default_sampling(system_prompt: str, messages: list[dict[str, str]], max_tokens: int) -> str:
@@ -156,6 +216,7 @@ def complete_once(
     history: list[dict[str, str]],
     *,
     sampling_fn: SamplingFn | None = None,
+    continue_model: "ContinueModel | None" = None,
 ) -> str:
     system_prompt = "\n".join(
         [
@@ -202,7 +263,69 @@ def complete_once(
             return _complete_anthropic(key, system_prompt, history, max_tokens)
         raise RuntimeError(f"Unsupported direct provider: {provider}")
 
+    if backend.startswith("continue:"):
+        if continue_model is None:
+            raise RuntimeError("continue backend requires a resolved model")
+        provider = continue_model.provider
+        if not continue_provider_supported(provider):
+            raise RuntimeError(f"Unsupported continue provider: {provider}")
+        limit = max_tokens
+        if continue_model.max_tokens:
+            limit = min(max_tokens, continue_model.max_tokens)
+        if provider == "anthropic":
+            return _complete_anthropic(
+                continue_model.api_key or "",
+                system_prompt,
+                history,
+                limit,
+                model=continue_model.model,
+                base_url=continue_model.api_base,
+                headers=continue_model.headers,
+            )
+        return _complete_openai_compatible(
+            _continue_base_url(provider, continue_model.api_base),
+            continue_model.model,
+            continue_model.api_key,
+            system_prompt,
+            history,
+            limit,
+            headers=continue_model.headers,
+        )
+
     raise RuntimeError(f"Unsupported subagent backend: {backend}")
+
+
+class SubagentCancelled(RuntimeError):
+    pass
+
+
+LOOP_WRITE_TOOLS = ("create_file", "apply_edits", "git_manage")
+
+# Tool calls from loop backends run in a server thread with a deadline. They are
+# NOT isolated in the worker process (importing worker_supervisor here would be
+# circular), so write-capable roles are gated behind SUBAGENT_LOOP_WRITE=1.
+
+
+def _call_tool(fn: ToolFn, args: dict[str, Any], deadline: float = 60.0) -> dict:
+    box: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            box["result"] = fn(**args)
+        except Exception as exc:  # noqa: BLE001
+            box["result"] = {"error": str(exc)}
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(deadline)
+    if thread.is_alive():
+        return {"error": f"tool timed out after {deadline:.0f}s"}
+    return box.get("result", {"error": "tool returned no result"})
+
+
+def _check_cancel(cancel_event: Any) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise SubagentCancelled("cancelled")
 
 
 def run_loop(
@@ -213,12 +336,23 @@ def run_loop(
     deliverable: str | None,
     *,
     sampling_fn: SamplingFn | None = None,
+    continue_model: "ContinueModel | None" = None,
+    cancel_event: Any = None,
+    allow_write: bool | None = None,
 ) -> tuple[str, int, int]:
+    if allow_write is None:
+        allow_write = os.environ.get("SUBAGENT_LOOP_WRITE") == "1"
+    if not allow_write and any(t in role.allowed_tools for t in LOOP_WRITE_TOOLS):
+        raise RuntimeError(
+            f"role '{role.name}' can write and loop write access is not enabled (set SUBAGENT_LOOP_WRITE=1)"
+        )
+
     history: list[dict[str, str]] = []
     tool_calls = 0
     token_estimate = 0
 
     for turn in range(1, role.max_turns + 1):
+        _check_cancel(cancel_event)
         assistant_text = complete_once(
             backend,
             role,
@@ -227,7 +361,9 @@ def run_loop(
             deliverable,
             history,
             sampling_fn=sampling_fn,
+            continue_model=continue_model,
         )
+        _check_cancel(cancel_event)
         token_estimate += max(1, len(assistant_text) // 4)
         history.append({"role": "assistant", "content": assistant_text})
 
@@ -245,14 +381,12 @@ def run_loop(
         tool_name = action["tool"]
         if tool_name not in role.allowed_tools:
             raise RuntimeError(f"tool '{tool_name}' is outside role allowlist")
+        _check_cancel(cancel_event)
         tool_fn = _ALLOWED_TOOLS.get(tool_name)
         if tool_fn is None:
-            raise RuntimeError(f"tool '{tool_name}' is not available in loop backends")
-
-        try:
-            tool_result = tool_fn(**action["args"])
-        except Exception as exc:  # noqa: BLE001
-            tool_result = {"error": str(exc)}
+            tool_result: Any = {"error": "tool not available in loop backends"}
+        else:
+            tool_result = _call_tool(tool_fn, action["args"])
 
         history.append(
             {

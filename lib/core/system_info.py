@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 from .. import support
-from ..subagents.resolve import resolve_backend
+from ..subagents.resolve import resolve_backend, resolve_continue
 from ..support import describe
 from ..subagents.roles import ROLES
 
@@ -43,6 +43,12 @@ def get_capabilities() -> dict:
     pytest_ok = shutil.which("pytest") is not None
 
     subagent_backend = resolve_backend()
+    # Only non-secret identifiers: provider, model name and config path. Never the key.
+    continue_info = None
+    if subagent_backend.startswith('continue:'):
+        resolved = resolve_continue()
+        if resolved is not None:
+            continue_info = {**resolved.model.safe_summary(), 'config_path': resolved.config_path}
 
     tools: dict[str, dict] = {
         # Core tools — always available
@@ -102,8 +108,9 @@ def get_capabilities() -> dict:
         "env": {
             "SUBAGENT_BACKEND": bool(os.environ.get("SUBAGENT_BACKEND", "").strip()),
             "SUBAGENT_LOCAL": bool(os.environ.get("SUBAGENT_LOCAL", "").strip()),
+            "SUBAGENT_CONTINUE": bool(os.environ.get("SUBAGENT_CONTINUE", "").strip()),
         },
-        "subagents": {"backend": subagent_backend},
+        "subagents": {"backend": subagent_backend, **({"continue": continue_info} if continue_info else {})},
     }
 
 

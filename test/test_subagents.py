@@ -35,6 +35,8 @@ class SubagentToolTests(unittest.TestCase):
         importlib.reload(subagent_tools)
         self.mcp = FakeMCP()
         subagent_tools.register(self.mcp)
+        # Cooperative frames only open for an explicit SUBAGENT_BACKEND=cooperative.
+        subagent_tools._COOP_EXPLICIT = True
 
 
     def test_new_roles_are_available(self):
@@ -202,7 +204,7 @@ class SubagentToolTests(unittest.TestCase):
             with patch.object(subagent_loop, "run_loop", side_effect=slow_run):
                 out = self.mcp.tools["subagent_run"](role="explorer", task="cancel me", wait=True)
                 self.assertEqual(out["status"], "running")
-                cancelled = self.mcp.tools["subagent_cancel"](task_id=out["task_id"])
+                cancelled = self.mcp.tools["subagent_cancel"](task_id=out["task_id"], confirm=True)
 
         self.assertEqual(cancelled["state"], "cancelled")
 
@@ -211,6 +213,33 @@ class SubagentToolTests(unittest.TestCase):
         time.sleep(0.7)
         status = self.mcp.tools["subagent_status"](task_id=out["task_id"])
         self.assertEqual(status["state"], "cancelled")
+
+
+class UnavailableBackendTests(unittest.TestCase):
+    def setUp(self):
+        import importlib
+
+        importlib.reload(subagent_tools)
+        self.mcp = FakeMCP()
+        subagent_tools.register(self.mcp)
+
+    def test_fallback_cooperative_returns_unavailable_and_opens_no_frame(self):
+        subagent_tools._BACKEND = "cooperative"
+        subagent_tools._COOP_EXPLICIT = False
+        out = self.mcp.tools["subagent_run"](role="explorer", task="inspect")
+        self.assertEqual(out["status"], "unavailable")
+        self.assertNotIn("task_id", out)
+        self.assertIsNone(subagent_tools._MANAGER.open_frame())
+        self.assertIsNone(subagent_tools.before_tool_call("apply_edits", {}))
+
+    def test_write_role_is_unavailable_on_loop_backend_without_opt_in(self):
+        subagent_tools._BACKEND = "direct:openai"
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SUBAGENT_LOOP_WRITE", None)
+            out = self.mcp.tools["subagent_run"](role="coder", task="implement")
+        self.assertEqual(out["status"], "unavailable")
+        self.assertIn("SUBAGENT_LOOP_WRITE=1", out["message"])
+        self.assertNotIn("task_id", out)
 
 
 class LoopBackendTests(unittest.TestCase):

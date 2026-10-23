@@ -28,6 +28,7 @@ class CommitNudgeTextOnlyTests(unittest.TestCase):
         for target, value in (
             (patch.object(subagent_tools, "_MANAGER", self.manager), None),
             (patch.object(subagent_tools, "_BACKEND", "cooperative"), None),
+            (patch.object(subagent_tools, "_COOP_EXPLICIT", True), None),
             (patch.dict(os.environ, {}, clear=False), None),
         ):
             target.start()
@@ -90,6 +91,16 @@ class CommitNudgeTextOnlyTests(unittest.TestCase):
         self.assertEqual(blocked["error_code"], "subagent_scope_violation")
         self.assertIn("subagent_cancel", blocked["message"])
         self.assertIn("confirm=true", blocked["message"])
+
+
+    def test_unavailable_backend_falls_back_to_text_only_nudge(self):
+        with patch.object(subagent_tools, "_COOP_EXPLICIT", False):
+            with patch.dict(os.environ, {"HANDY_CODER_COMMIT_SUBAGENT": "1"}):
+                results = [self._write(index) for index in range(3)]
+        nudge = next(r["commit_nudge"] for r in results if "commit_nudge" in r)
+        self.assertIsNone(nudge["task_id"])
+        self.assertIn("Review .gitignore", nudge["message"])
+        self.assertIsNone(self.manager.open_frame())
 
 
 if __name__ == "__main__":

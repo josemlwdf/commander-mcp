@@ -38,7 +38,7 @@ def _plan_content(user_task: str, context: str | None) -> str:
         "## Orchestrator Memory Policy\n\n"
         "- Keep only minimal coordination context in the parent thread (current task, status, blockers).\n"
         "- Delegate substantial analysis or implementation to subagents instead of solving inline.\n"
-        "- Prefer another subagent run whenever work spans multiple files or requires more than one reasoning step.\n\n"
+        "- Prefer another subagent run whenever work spans multiple files or requires more than one reasoning step, but only while subagent_run is available. If subagent_run returns status 'unavailable' (no subagent LLM configured), do not retry: do the step yourself in this conversation and record the outcome in tasks.md.\n\n"
         "## Generalist Assessment\n\n"
         "_Pending: fill with subagent output._\n\n"
         "## Validation Strategy\n\n"
@@ -101,6 +101,7 @@ def orchestrator_bootstrap(
             "Replace bootstrap tasks in tasks.md with planner output while keeping [ ] placeholders.",
             "Execute each task via coder subagents and update status labels.",
             "Keep the parent thread lightweight: orchestrate, summarize, and spawn more subagents when work expands.",
+            "If subagent_run returns status 'unavailable' (no subagent LLM configured), do not retry: do each step yourself in this conversation and still update tasks.md.",
         ],
     }
 
@@ -110,5 +111,5 @@ def register(mcp):
         "Create `.handy-coder/implementation-plan.md` and `.handy-coder/tasks.md` from a single high-level request, first deleting any existing copies of those files. "
         "This bootstraps an orchestrator-first workflow where generalist/planner/coder subagents are the default execution path and the parent agent keeps minimal retained context. "
         "tasks.md lines start with [ ] and include status labels for non_started, interrupted, complete, or failed. "
-        "When to use: Start orchestrated multi-step work with persistent plan artifacts and frequent subagent delegation."
+        "When to use: Start orchestrated multi-step work with persistent plan artifacts and frequent subagent delegation when a subagent backend is available. If subagent_run returns unavailable, the parent does the work itself."
     ))(orchestrator_bootstrap)
