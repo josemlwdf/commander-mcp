@@ -46,6 +46,12 @@ class Base(unittest.TestCase):
         self.home.mkdir()
         self.ws.mkdir()
         self.cdir = self.home / '.continue'
+        # Keep tests hermetic: never read the real Windows profiles under /mnt/c.
+        empty_users = self.root / 'no-wsl-users'
+        empty_users.mkdir()
+        old_users_root = cc.WSL_USERS_ROOT
+        cc.WSL_USERS_ROOT = empty_users
+        self.addCleanup(setattr, cc, 'WSL_USERS_ROOT', old_users_root)
 
     def models(self, entries, env=None, directory=None, refs=True):
         return cc.list_usable_models(
@@ -82,6 +88,67 @@ class PathTests(Base):
         for user in ('no-such-user-xyz', 'a/b', '..'):
             paths = cc.candidate_config_paths(self.ws, {'USER': user}, self.home)
             self.assertFalse(any(str(p).startswith('/mnt/c/Users') for p in paths), user)
+
+
+class WslEnumerationTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.users = self.root / 'users'
+        self.users.mkdir()
+        old = cc.WSL_USERS_ROOT
+        cc.WSL_USERS_ROOT = self.users
+        self.addCleanup(setattr, cc, 'WSL_USERS_ROOT', old)
+
+    def wsl_paths(self, env=None):
+        paths = cc.candidate_config_paths(self.ws, env or {}, self.home)
+        return [p for p in paths if str(p).startswith(str(self.users))]
+
+    def test_other_windows_user_is_found(self):
+        (self.users / 'Alice' / '.continue').mkdir(parents=True)
+        paths = self.wsl_paths({'USER': 'think'})
+        self.assertEqual(paths, [
+            self.users / 'Alice' / '.continue' / 'config.yaml',
+            self.users / 'Alice' / '.continue' / 'config.json',
+        ])
+
+    def test_current_user_first_case_insensitive(self):
+        (self.users / 'Alice' / '.continue').mkdir(parents=True)
+        (self.users / 'Bob' / '.continue').mkdir(parents=True)
+        paths = self.wsl_paths({'USER': 'bob'})
+        self.assertEqual(paths[0], self.users / 'Bob' / '.continue' / 'config.yaml')
+        self.assertEqual(paths[2], self.users / 'Alice' / '.continue' / 'config.yaml')
+
+    def test_system_profiles_and_missing_continue_dir_skipped(self):
+        for name in ('Public', 'Default', 'Default User', 'All Users'):
+            (self.users / name / '.continue').mkdir(parents=True)
+        (self.users / 'NoContinue').mkdir()
+        (self.users / 'file.txt').write_text('x', encoding='utf-8')
+        self.assertEqual(self.wsl_paths({'USER': 'x'}), [])
+
+    def test_symlinked_profile_skipped(self):
+        real = self.root / 'elsewhere' / '.continue'
+        real.mkdir(parents=True)
+        try:
+            os.symlink(real.parent, self.users / 'Linked')
+        except (OSError, NotImplementedError):
+            self.skipTest('symlinks unavailable')
+        self.assertEqual(self.wsl_paths({'USER': 'x'}), [])
+
+    def test_missing_root_is_empty(self):
+        cc.WSL_USERS_ROOT = self.root / 'does-not-exist'
+        self.assertEqual(cc._wsl_continue_dirs('think'), [])
+
+    def test_profile_count_is_capped(self):
+        for i in range(cc.MAX_WSL_PROFILES + 5):
+            (self.users / f'u{i:03d}' / '.continue').mkdir(parents=True)
+        self.assertEqual(len(cc._wsl_continue_dirs('')), cc.MAX_WSL_PROFILES)
+
+    def test_config_in_other_profile_resolves(self):
+        write_config(self.users / 'Alice' / '.continue', 'config.json',
+                     {'models': [entry()]})
+        got = cc.resolve_continue_model(self.ws, {'USER': 'think'}, self.home)
+        self.assertIsNotNone(got)
+        self.assertEqual(got.model.api_key, KEY)
 
 
 class KeyTests(Base):

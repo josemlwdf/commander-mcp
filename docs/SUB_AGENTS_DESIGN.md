@@ -37,7 +37,7 @@ Nothing
 No, shares the main chat context
 Always available, the floor
 The server asks three questions in order and takes the first yes; if all three fail, it runs cooperative mode.
-The server reads Continue's own config only when the user opts in with `SUBAGENT_CONTINUE=1` or `SUBAGENT_BACKEND=continue` (see the addendum at the end). It never does so by default, because reading another tool's files without consent is intrusive and the format can change. A missing or unreadable config means no Continue backend.
+The server reads Continue's own config by default in auto mode (see the addendum at the end); `SUBAGENT_CONTINUE=0` turns this off and `SUBAGENT_BACKEND=continue` forces it. The workspace-local config stays untrusted. A missing or unreadable config means no Continue backend.
 Architecture and module layout
 One SubagentManager owns task state, and two executors run the work: a loop executor that calls an LLM backend, and a cooperative executor that hands the work back to Continue's own model.
 src/
@@ -278,7 +278,7 @@ This addendum supersedes the sections above where they conflict.
 
 - **No backend means `unavailable`.** When auto selection finds no sampling, provider key, Continue model or Ollama, `subagent_run` returns `status: "unavailable"`. It creates no task and opens no frame, so the parent is never locked out of its own tools. The parent should do the work itself and not retry.
 - **Cooperative is explicit only.** `delegated_to_host` and its frame (five-minute TTL, tool allowlist) happen only when `SUBAGENT_BACKEND=cooperative` is set.
-- **Continue backend.** `SUBAGENT_CONTINUE=1` (or `SUBAGENT_BACKEND=continue`) reuses a chat model from the user's Continue config. Auto order: sampling, provider key in the environment, Continue, Ollama. It spends the user's own credits or local model.
+- **Continue backend.** Default-on in auto mode (`SUBAGENT_CONTINUE=0` turns it off; `SUBAGENT_BACKEND=continue` forces it), it reuses a chat model from the user's Continue config. Auto order: sampling, provider key in the environment, Continue, Ollama. It spends the user's own credits or local model.
 - **Trust.** The workspace `.continue/config.yaml` is untrusted, so `${{ secrets.* }}` references in it are not resolved. Keys and header values are redacted from error text and never appear in `get_capabilities`.
 - **Loop write gate.** Loop backends run read-only roles. Roles that can write or commit need `SUBAGENT_LOOP_WRITE=1`, because loop tool calls run in a server thread with a deadline and are not isolated in the worker process.
 - **Cancel.** `subagent_cancel(confirm=true)` sets a per-task event that the loop checks each turn and before each tool call. An HTTP request already in flight still completes.

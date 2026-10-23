@@ -35,6 +35,9 @@ class SubagentToolTests(unittest.TestCase):
         importlib.reload(subagent_tools)
         self.mcp = FakeMCP()
         subagent_tools.register(self.mcp)
+        # register() resolves the backend, and default-on Continue discovery could
+        # pick up a real config on the developer machine; pin the cooperative floor.
+        subagent_tools._BACKEND = "cooperative"
         # Cooperative frames only open for an explicit SUBAGENT_BACKEND=cooperative.
         subagent_tools._COOP_EXPLICIT = True
 
@@ -305,7 +308,8 @@ class LoopBackendTests(unittest.TestCase):
 
 class ResolveBackendTests(unittest.TestCase):
     def test_resolve_backend_env_matrix(self):
-        with patch.dict(os.environ, {}, clear=True):
+        # Continue discovery is default-on, so opt out to reach the cooperative floor.
+        with patch.dict(os.environ, {"SUBAGENT_CONTINUE": "0"}, clear=True):
             self.assertEqual(resolve_backend({}), "cooperative")
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "x"}, clear=True):

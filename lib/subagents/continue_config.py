@@ -16,6 +16,11 @@ from typing import Any, Callable, Mapping
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_ENV_BYTES = 64 * 1024
 LOCAL_PROVIDERS = frozenset({"ollama", "lmstudio", "llamafile", "llama.cpp"})
+# WSL: the Windows profile directories are mounted here. Tests override this.
+WSL_USERS_ROOT = Path("/mnt/c/Users")
+# Windows built-in profile folders that never hold a user's Continue config.
+WSL_SYSTEM_PROFILES = frozenset({"public", "default", "default user", "all users", "defaultapppool"})
+MAX_WSL_PROFILES = 32
 _SECRET_REF = re.compile(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}")
 _FULL_SECRET_REF = re.compile(r"^\s*\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}\s*$")
 
@@ -52,6 +57,36 @@ def _safe_user_component(user: str) -> bool:
     return bool(user) and user not in {".", ".."} and "/" not in user and "\\" not in user
 
 
+def _wsl_continue_dirs(current_user: str) -> list[Path]:
+    """Return existing <WSL_USERS_ROOT>/<profile>/.continue directories.
+
+    The current user's profile (matched case-insensitively, as Windows names
+    are) comes first, then the other profiles in sorted order. System profiles,
+    unsafe names and symlinked profiles are skipped; the count is capped.
+    """
+    try:
+        profiles = sorted(WSL_USERS_ROOT.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return []
+    wanted = current_user.strip().lower()
+    first: list[Path] = []
+    rest: list[Path] = []
+    for profile in profiles:
+        name = profile.name
+        if not _safe_user_component(name) or name.lower() in WSL_SYSTEM_PROFILES:
+            continue
+        try:
+            if profile.is_symlink() or not profile.is_dir():
+                continue
+            continue_dir = profile / ".continue"
+            if not continue_dir.is_dir():
+                continue
+        except OSError:
+            continue
+        (first if wanted and name.lower() == wanted else rest).append(continue_dir)
+    return (first + rest)[:MAX_WSL_PROFILES]
+
+
 def _candidates(
     workspace_root: str | Path | None,
     env: Mapping[str, str],
@@ -81,12 +116,9 @@ def _candidates(
         out.append((home / ".continue" / "config.yaml", True))
         out.append((home / ".continue" / "config.json", True))
 
-    user = _current_user(env)
-    if _safe_user_component(user):
-        wsl_dir = Path("/mnt/c/Users") / user / ".continue"
-        if wsl_dir.is_dir():
-            out.append((wsl_dir / "config.yaml", True))
-            out.append((wsl_dir / "config.json", True))
+    for wsl_dir in _wsl_continue_dirs(_current_user(env)):
+        out.append((wsl_dir / "config.yaml", True))
+        out.append((wsl_dir / "config.json", True))
 
     profile = (env.get("USERPROFILE") or "").strip()
     if profile:

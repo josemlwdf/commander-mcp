@@ -183,14 +183,14 @@ Subagent tools provide a stable five-tool contract for delegated work without re
 
 Role tool access is scoped: `generalist`/`explorer` stay read-only, `reviewer` adds diagnostics/test execution, `planner`/`coder` can also use `create_file` + `apply_edits` when the task requires writing files, and `committer` can use `git_manage`.
 
-Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, a model from your Continue config when `SUBAGENT_CONTINUE=1`, local Ollama when `SUBAGENT_LOCAL=1`, then no backend (`subagent_run` returns `unavailable`).
+Every subagent response includes a `backend` field. Default selection is `auto`, resolved in this order: sampling capability, existing provider key in the current process environment, a model from your Continue config (on by default; `SUBAGENT_CONTINUE=0` turns it off), local Ollama when `SUBAGENT_LOCAL=1`, then no backend (`subagent_run` returns `unavailable`).
 
 Loop-capable backends (`sampling`, `direct:*`, `local:ollama`, `continue:<provider>`) run an internal JSON-action loop and can return `completed` directly from `subagent_run` when `wait: true` and the run finishes quickly; otherwise they return `running` and should be polled with `subagent_status`.
 
 Optional overrides:
 
-- `SUBAGENT_BACKEND=cooperative|sampling|direct|local|continue` chooses the backend family. `continue` is its own opt-in and does not need `SUBAGENT_CONTINUE=1`; if no Continue model is usable it resolves to no backend.
-- `SUBAGENT_CONTINUE=1` lets `auto` selection use a model from your Continue config (see below). Any other value leaves it off.
+- `SUBAGENT_BACKEND=cooperative|sampling|direct|local|continue` chooses the backend family. `continue` forces Continue discovery even when `SUBAGENT_CONTINUE=0`; if no Continue model is usable it resolves to no backend.
+- `SUBAGENT_CONTINUE=0` (also `false`, `no` or `off`) stops `auto` selection from reading your Continue config (see below). Unset or any other value leaves discovery on.
 - `SUBAGENT_CONTINUE_MODEL` picks a Continue model by `name` or `model` (case-insensitive). An unknown value selects nothing; it never falls back to another model.
 - `SUBAGENT_CONTINUE_CONFIG` points at a specific Continue config file and is searched first.
 - `SUBAGENT_LOOP_WRITE=1` lets loop backends run roles that can write or commit (`planner`, `coder`, `committer`). Without it `subagent_run` returns `unavailable` for those roles.
@@ -202,7 +202,11 @@ Use subagents for broad searches, independent reviews, and large-input summaries
 
 #### Continue backend
 
-With `SUBAGENT_CONTINUE=1` (or `SUBAGENT_BACKEND=continue`) the server reuses a chat model from your [Continue](https://continue.dev) config, so you do not configure a second set of credentials. Config files are searched in this order: `SUBAGENT_CONTINUE_CONFIG`, `$CONTINUE_GLOBAL_DIR/config.yaml`, `~/.continue/config.yaml`, `~/.continue/config.json`, `/mnt/c/Users/<current user>/.continue/` when running under WSL (current user only), `%USERPROFILE%\.continue\`, then `<workspace>/.continue/config.yaml`. Files over 1 MiB are skipped.
+By default (unless `SUBAGENT_CONTINUE=0`) the server reuses a chat model from your [Continue](https://continue.dev) config, so you do not configure a second set of credentials. Config files are searched in this order: `SUBAGENT_CONTINUE_CONFIG`, `$CONTINUE_GLOBAL_DIR/config.yaml`, `~/.continue/config.yaml`, `~/.continue/config.json`, `/mnt/c/Users/<profile>/.continue/` for every Windows profile visible under WSL (current user first; `Public`, `Default`, `Default User` and `All Users` are skipped, symlinked profiles are ignored, at most 32 profiles), `%USERPROFILE%\.continue\`, then `<workspace>/.continue/config.yaml`. Files over 1 MiB are skipped.
+
+Only models with a chat role, a key (literal `apiKey`, an `Authorization` header or a `${{ secrets.X }}` reference resolved from the environment or a `.env` next to the config) and a supported provider are used; local providers such as Ollama need no key. The workspace config is untrusted and cannot resolve secret references. Keys are never logged or returned; `get_capabilities` reports only provider, model name and config path. Roles that can write (`planner`, `coder`, `committer`) still need `SUBAGENT_LOOP_WRITE=1`.
+
+**Running in Docker.** A container cannot see your host's Continue directory. Mount it read-only and point `SUBAGENT_CONTINUE_CONFIG` at the mounted file, for example `-v ~/.continue:/continue:ro -e SUBAGENT_CONTINUE_CONFIG=/continue/config.yaml`. Secret references need the matching variables in the container environment or a `.env` file in the mounted directory.
 
 - **Cost:** this spends your own provider credits or hits your own local model. Loops can take several turns per task, so the cost is not one request.
 - **Models:** only entries with the `chat` role (or no `roles`) and a supported provider are used: `openai`, `anthropic`, `openrouter`, `deepseek`, `mistral`, `groq`, `together`, `lmstudio`, `ollama`. Hub entries (`uses:`), other providers and remote models without a resolvable key are skipped.

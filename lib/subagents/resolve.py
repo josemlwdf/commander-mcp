@@ -25,8 +25,13 @@ def ollama_up(timeout: float = 0.4) -> bool:
         return False
 
 
+_CONTINUE_OFF_VALUES = frozenset({'0', 'false', 'no', 'off'})
+
+
 def _continue_enabled() -> bool:
-    return os.environ.get('SUBAGENT_CONTINUE', '').strip() == '1'
+    # Default-on: auto mode consults the user's Continue config unless
+    # SUBAGENT_CONTINUE is explicitly set to 0/false/no/off.
+    return os.environ.get('SUBAGENT_CONTINUE', '').strip().lower() not in _CONTINUE_OFF_VALUES
 
 
 def resolve_continue():
