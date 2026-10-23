@@ -1,6 +1,13 @@
 """Shared workspace, MCP, and subprocess support."""
 from __future__ import annotations
-import fnmatch, os, re, shlex, subprocess, time, threading, signal
+import fnmatch
+import os
+import re
+import shlex
+import subprocess
+import time
+import threading
+import signal
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -47,10 +54,13 @@ def ensure_handy_coder_state_dir(root: Path | None = None) -> Path:
 def configure(root: str, shell: str | None = None) -> None:
     global ROOT, WORKING_DIRECTORY, SHELL
     ROOT = Path(root).expanduser().resolve(strict=True)
-    if not ROOT.is_dir(): raise ValueError(f"Workspace root is not a directory: {ROOT}")
+    if not ROOT.is_dir():
+        raise ValueError(f"Workspace root is not a directory: {ROOT}")
     WORKING_DIRECTORY = ROOT
-    if not WORKING_DIRECTORY: raise RuntimeError(f"'pwd' returned no working directory for {ROOT}")
-    if shell: SHELL = shell
+    if not WORKING_DIRECTORY:
+        raise RuntimeError(f"'pwd' returned no working directory for {ROOT}")
+    if shell:
+        SHELL = shell
     ensure_handy_coder_state_dir(ROOT)
     # Warn when the workspace root is a home directory or drive root — scanning
     # these trees often causes timeouts in large environments.
@@ -80,6 +90,14 @@ def _warn_high_risk_root(root: Path) -> None:
     except RuntimeError:
         pass
 
+PATH_ESCAPE_MESSAGE = "Path escapes authorized workspace root"
+
+
+def path_escape_message(path: object) -> str:
+    """Single wording for every workspace path-escape error."""
+    return f"{PATH_ESCAPE_MESSAGE}: {path}"
+
+
 def inside(path: str | Path, *, must_exist: bool = False) -> Path:
     raw = Path(path).expanduser()
     candidate = raw if raw.is_absolute() else ROOT / raw
@@ -87,12 +105,12 @@ def inside(path: str | Path, *, must_exist: bool = False) -> Path:
     try:
         normalized.relative_to(ROOT)
     except ValueError:
-        raise ValueError(f"Path escapes authorized workspace root: {path}")
+        raise ValueError(path_escape_message(path))
     p = normalized.resolve(strict=must_exist)
     try:
         p.relative_to(ROOT)
     except ValueError:
-        raise ValueError(f"Path escapes authorized workspace root: {path}")
+        raise ValueError(path_escape_message(path))
     return p
 
 def iter_workspace_files(
@@ -191,18 +209,23 @@ def run_process(command: str | list[str], *, cwd: str | Path = ROOT, timeout_ms:
                 shell: bool = False, max_output_bytes: int = MAX_OUTPUT_BYTES,
                 env: dict[str, str] | None = None, stdin: str | None = None, shell_executable: str | None = None) -> dict:
     work = inside(cwd, must_exist=True)
-    if not work.is_dir(): raise ValueError(f"Working directory is not a directory: {work}")
-    if not 1 <= int(timeout_ms) <= 600_000: raise ValueError("timeout_ms must be between 1 and 600000")
+    if not work.is_dir():
+        raise ValueError(f"Working directory is not a directory: {work}")
+    if not 1 <= int(timeout_ms) <= 600_000:
+        raise ValueError("timeout_ms must be between 1 and 600000")
     start = time.monotonic()
     argv = command
     use_shell = shell
     if shell:
         validate_shell_command(command, work)
         selected_shell = shell_executable or SHELL
-        if os.name == "nt": argv = [selected_shell, "-Command", command]
-        else: argv = [selected_shell, "-c", command]
+        if os.name == "nt":
+            argv = [selected_shell, "-Command", command]
+        else:
+            argv = [selected_shell, "-c", command]
         use_shell = False
-    captured={"stdout":bytearray(),"stderr":bytearray()}; truncated={"stdout":False,"stderr":False}
+    captured={"stdout":bytearray(),"stderr":bytearray()}
+    truncated={"stdout":False,"stderr":False}
     try:
         p=subprocess.Popen(argv,cwd=work,shell=use_shell,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                            stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
@@ -213,12 +236,16 @@ def run_process(command: str | list[str], *, cwd: str | Path = ROOT, timeout_ms:
     def drain(stream,key):
         while True:
             chunk=stream.read(65536)
-            if not chunk: break
+            if not chunk:
+                break
             room=max_output_bytes-len(captured[key])
-            if room>0: captured[key].extend(chunk[:room])
-            if len(chunk)>room: truncated[key]=True
+            if room>0:
+                captured[key].extend(chunk[:room])
+            if len(chunk)>room:
+                truncated[key]=True
     readers=[threading.Thread(target=drain,args=(p.stdout,"stdout"),daemon=True),threading.Thread(target=drain,args=(p.stderr,"stderr"),daemon=True)]
-    for t in readers:t.start()
+    for t in readers:
+        t.start()
     if stdin is not None:
         try:
             p.stdin.write(stdin.encode("utf-8"))
@@ -226,28 +253,35 @@ def run_process(command: str | list[str], *, cwd: str | Path = ROOT, timeout_ms:
         except BrokenPipeError:
             pass
     timed_out=False
-    try: code=p.wait(timeout=timeout_ms/1000)
+    try:
+        code=p.wait(timeout=timeout_ms/1000)
     except subprocess.TimeoutExpired:
         timed_out=True
         try:
-            if os.name=="nt": p.kill()
-            else: os.killpg(p.pid,signal.SIGKILL)
-        except ProcessLookupError: pass
+            if os.name=="nt":
+                p.kill()
+            else:
+                os.killpg(p.pid,signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         code=p.wait()
-    for t in readers:t.join()
+    for t in readers:
+        t.join()
     p.stdout.close()
     p.stderr.close()
     def decode(key): return bytes(captured[key]).decode("utf-8","replace")+("\n...[truncated]" if truncated[key] else "")
     stderr_text=decode("stderr")
     timeout_reason = f"Process exceeded {timeout_ms}ms." if timed_out else None
-    if timed_out: stderr_text+=f"\n[TIMEOUT] Process exceeded {timeout_ms}ms."
+    if timed_out:
+        stderr_text+=f"\n[TIMEOUT] Process exceeded {timeout_ms}ms."
     return {"stdout":decode("stdout"), "stderr":stderr_text, "exit_code":124 if timed_out else code, "timed_out":timed_out,
             "timeout_reason": timeout_reason,
             "duration_ms":round((time.monotonic()-start)*1000)}
 
 def validate_shell_command(command: str, cwd: Path) -> None:
     """Reject obvious shell path escapes, including redirection and nested commands."""
-    if not command.strip(): raise ValueError("command cannot be empty")
+    if not command.strip():
+        raise ValueError("command cannot be empty")
     if re.search(r"(?:\$\((.*?)\)|`([^`]+)`)", command):
         for m in re.finditer(r"\$\((.*?)\)|`([^`]+)`", command):
             validate_shell_command(m.group(1) or m.group(2), cwd)
@@ -258,7 +292,8 @@ def validate_shell_command(command: str, cwd: Path) -> None:
         lexer.whitespace_split = True
         lexer.commenters = ""
         tokens = list(lexer)
-    except ValueError: raise ValueError("Malformed shell command")
+    except ValueError:
+        raise ValueError("Malformed shell command")
 
     # Check only real shell redirection operators. Quoted text such as `>` is
     # emitted as a regular word by shlex and therefore cannot trigger this guard.
@@ -269,8 +304,10 @@ def validate_shell_command(command: str, cwd: Path) -> None:
             target = tokens[index + 1] if index + 1 < len(tokens) else ""
             if target and not all(ch in _SHELL_PUNCTUATION for ch in target):
                 if target not in _SAFE_DEVICES:
-                    try: inside(target if Path(target).is_absolute() else cwd / target)
-                    except ValueError: raise ValueError(f"Redirection target escapes authorized workspace: {target}")
+                    try:
+                        inside(target if Path(target).is_absolute() else cwd / target)
+                    except ValueError:
+                        raise ValueError(f"Redirection target escapes authorized workspace: {target}")
 
     at_command = True      # next word is a command name (start, or after ; && || | ( ))
     command_name = ""
@@ -284,7 +321,8 @@ def validate_shell_command(command: str, cwd: Path) -> None:
             raise ValueError(f"'{command_name}' requires an explicit workspace-relative directory target")
 
     for token in tokens:
-        if os.name == "nt": token = token.strip("'\"")
+        if os.name == "nt":
+            token = token.strip("'\"")
         if token and all(ch in _SHELL_PUNCTUATION for ch in token):
             if "<" in token or ">" in token:
                 # `>&` / `<&` duplicate descriptors and heredocs take no path target.
@@ -373,8 +411,10 @@ def _split_unquoted_newlines(command: str) -> str:
             out.append(ch)
             continue
         if quote:
-            if ch == quote: quote = ""
-        elif ch in "'\"": quote = ch
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
         elif ch in "\r\n":
             out.append(" ; ")
             continue
@@ -390,7 +430,8 @@ def _check_shell_token(token: str, cwd: Path, *, command_position: bool = False)
     workspace-relative launcher such as `.venv/bin/python` keeps working.
     """
     candidates = [token]
-    if "=" in token: candidates.append(token.split("=", 1)[1])
+    if "=" in token:
+        candidates.append(token.split("=", 1)[1])
     for candidate in candidates:
         if not candidate or candidate in _SAFE_DEVICES:
             continue
@@ -399,18 +440,22 @@ def _check_shell_token(token: str, cwd: Path, *, command_position: bool = False)
             continue  # a lone "/" is often division; command-specific checks handle path commands
         explicit = (candidate == ".." or candidate.startswith(("./", "../", "/", "~", "\\\\"))
                     or re.match(r"[A-Za-z]:[\\/]", candidate))
-        if not (explicit or "/" in candidate or "\\" in candidate): continue
-        if candidate.startswith("~"): raise ValueError("Home-directory path escapes the workspace")
+        if not (explicit or "/" in candidate or "\\" in candidate):
+            continue
+        if candidate.startswith("~"):
+            raise ValueError("Home-directory path escapes the workspace")
         target = candidate if Path(candidate).is_absolute() else cwd / candidate
         try:
             if explicit and not command_position:
                 inside(target)
             else:
                 Path(os.path.normpath(str(target))).relative_to(ROOT)
-        except ValueError: raise ValueError(f"Command token '{candidate}' looks like a path outside the authorized workspace. If this is not a path (e.g. a division operator), rewrite the command to avoid ambiguity.")
+        except ValueError:
+            raise ValueError(f"Command token '{candidate}' looks like a path outside the authorized workspace. If this is not a path (e.g. a division operator), rewrite the command to avoid ambiguity.")
 
 def result_text(value: object) -> str:
-    if isinstance(value, str): return value
+    if isinstance(value, str):
+        return value
     import json
     return json.dumps(value, ensure_ascii=False, indent=2)
 

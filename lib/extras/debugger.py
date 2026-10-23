@@ -5,7 +5,6 @@ import ipaddress
 import json
 import multiprocessing
 import os
-import signal
 import socket
 import threading
 import time

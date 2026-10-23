@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 import urllib.parse
 from collections import OrderedDict
 from pathlib import Path

@@ -47,7 +47,7 @@ def create_file(
     try:
         p = inside(path)
     except ValueError:
-        return _error("path_escape", path, f"Path escapes authorized workspace root: {path}")
+        return _error("path_escape", path, support.path_escape_message(path))
     except OSError as exc:
         # strerror only: str(exc) embeds the absolute host path.
         return _error("io_error", path, f"{exc.strerror or 'Path could not be resolved'}: {path}")
@@ -84,7 +84,7 @@ def create_file(
         if permissions is not None and hasattr(p, "chmod") and os.name != "nt":
             p.chmod(permissions)
     except ValueError:
-        return _error("path_escape", path, f"Path escapes authorized workspace root: {path}")
+        return _error("path_escape", path, support.path_escape_message(path))
     except FileExistsError:
         return _error("already_exists", path, f"File already exists (pass overwrite=true to replace it): {path}")
     except (NotADirectoryError, IsADirectoryError):
@@ -117,8 +117,10 @@ def create_file(
             except Exception as exc:
                 formatting = {"supported": False, "ok": False, "error": str(exc), "reports": [],
                               "tools_run": [], "tools_skipped": []}
-        if post_process_python: result["python_processing"] = processing
-        if format_content: result["formatter"] = formatting
+        if post_process_python:
+            result["python_processing"] = processing
+        if format_content:
+            result["formatter"] = formatting
         result["post_processing_ok"] = bool(processing.get("ok")) and bool(formatting.get("ok"))
     if p.suffix.lower() == ".py":
         result["dependency_hint"] = "Review requirements.txt and add any new third-party dependencies introduced by this Python file."
@@ -153,6 +155,6 @@ def register(mcp):
         "with a message instead of raising; nothing is written. "
         "Response includes the workspace-relative path, created, overwritten, bytes and lines; counts describe final on-disk content. Submitted content is preserved by default; format_content=true opts into formatting, and post_process_python=true opts into Python source processing. Formatting and processing failures are reported and the file is kept. Python file responses remind the agent to update requirements.txt if the file introduces third-party dependencies. "
         "HTML files receive a syntax check of their final saved content and suggest organizing web content under static/html, static/js, and static/css; these directories are not created automatically. "
-        "Successful creates and overwrites can trigger the configured commit nudge, which may start a commit subagent task. "
+        "Successful creates and overwrites can trigger the configured commit nudge, which is text-only by default; a commit subagent task starts only when HANDY_CODER_COMMIT_SUBAGENT=1, and an open subagent frame is released with subagent_complete or subagent_cancel(confirm=true). "
         "When to use: Add a new file; use apply_edits to modify existing files."
     ))(create_file)

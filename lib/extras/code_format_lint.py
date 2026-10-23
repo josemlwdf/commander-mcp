@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field
-from ..support import inside, run_process, describe
+from ..support import inside, run_process, describe, path_escape_message
 from ..utils.python_postprocess import process_python_file
 
 
@@ -159,7 +159,7 @@ def code_format_lint(
             except FileNotFoundError:
                 path_errors.append({"path": path, "error_code": "not_found", "message": f"Workspace path not found: {path}"})
             except ValueError:
-                path_errors.append({"path": path, "error_code": "path_escape", "message": f"Path escapes authorized workspace: {path}"})
+                path_errors.append({"path": path, "error_code": "path_escape", "message": path_escape_message(path)})
         if path_errors:
             return {"supported": True, "ok": False, "error_code": "invalid_paths", "errors": path_errors,
                     "message": "One or more requested paths could not be used."}

@@ -10,7 +10,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..support import describe, inside, run_process
+from ..support import describe, inside, path_escape_message, run_process
 
 _MAX_TIMEOUT_MS = 600_000
 
@@ -49,10 +49,14 @@ def _build_command(candidate: dict[str, str], directory: Path) -> tuple[list[str
             return None, f"Could not read package.json: {exc}"
         if not package.get("scripts", {}).get("build"):
             return None, "package.json does not declare a build script."
-        if (directory / "pnpm-lock.yaml").exists(): manager = "pnpm"
-        elif (directory / "yarn.lock").exists(): manager = "yarn"
-        elif (directory / "bun.lock").exists() or (directory / "bun.lockb").exists(): manager = "bun"
-        else: manager = "npm"
+        if (directory / "pnpm-lock.yaml").exists():
+            manager = "pnpm"
+        elif (directory / "yarn.lock").exists():
+            manager = "yarn"
+        elif (directory / "bun.lock").exists() or (directory / "bun.lockb").exists():
+            manager = "bun"
+        else:
+            manager = "npm"
         executable = shutil.which(manager)
         return ([executable, "run", "build"] if executable else None), (None if executable else f"Node build tool unavailable: {manager} is not installed.")
     executable = shutil.which("dotnet")
@@ -75,8 +79,10 @@ def _diagnostics(output: str, severity: str) -> list[dict]:
             match = pattern.match(line.strip())
             if match and match.group("severity").lower() == severity:
                 item = match.groupdict()
-                if item.get("line"): item["line"] = int(item["line"])
-                if item.get("column"): item["column"] = int(item["column"])
+                if item.get("line"):
+                    item["line"] = int(item["line"])
+                if item.get("column"):
+                    item["column"] = int(item["column"])
                 item["message"] = (item.get("message") or "").strip()
                 found.append(item)
                 break
@@ -97,7 +103,7 @@ def build_project(
             selected = inside(path, must_exist=True)
         except ValueError:
             return {"success": False, "supported": False, "error_code": "path_escape",
-                    "message": f"Path escapes authorized workspace: {path}", "path": path}
+                    "message": path_escape_message(path), "path": path}
         except FileNotFoundError:
             return {"success": False, "supported": False, "error_code": "not_found",
                     "message": f"Workspace path not found: {path}", "path": path}
@@ -105,7 +111,8 @@ def build_project(
         selected_name = selected.name
         if selected_file and selected.name in {item["configuration"] for item in candidates}:
             selected = selected.parent
-        if not selected.is_dir(): raise ValueError("path must select a project directory or configuration file")
+        if not selected.is_dir():
+            raise ValueError("path must select a project directory or configuration file")
         rel = selected.relative_to(root).as_posix() or "."
         candidates = [item for item in candidates if item["path"] == rel and (not selected_file or item["configuration"] == selected_name)]
         if not candidates:
@@ -142,4 +149,4 @@ def build_project(
 
 
 def register(mcp):
-    return mcp.tool(description=describe("Build one detected Python, Node, or .NET project using its declared build system. If several projects exist, supply path to select one; otherwise project choices are returned without running a build. Uses the project lockfile to select a Node package manager and returns parsed diagnostics plus raw output. When to use: Build a workspace project and inspect structured build results."))(build_project)
+    return mcp.tool(description=describe("Build one detected Python, Node, or .NET project using its declared build system. If several projects exist, supply path to select one; otherwise project choices are returned without running a build. Uses the project lockfile to select a Node package manager and returns parsed diagnostics plus raw output: raw_output is stdout followed by stderr (concatenated, not interleaved), and stdout and stderr are also returned separately. When to use: Build a workspace project and inspect structured build results."))(build_project)

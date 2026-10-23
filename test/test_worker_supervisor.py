@@ -1,25 +1,20 @@
 import os
-import signal
 import socket
-import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-import pydantic
 from pydantic import ValidationError
 
 from lib import support
-from lib.core import apply_edits, code_search, git_manage, read_files, terminal_exec
+from lib.core import apply_edits, code_search, read_files, terminal_exec
 from lib.extras import debugger
 from lib.worker_supervisor import (
-    DEFAULT_WORKER_DEADLINE,
     run_tool_in_worker,
     supervise_fastmcp_tools,
-    _SEMAPHORE,
 )
 
 

@@ -124,11 +124,11 @@ def install(mcp: Any) -> None:
     ) -> dict:
         entry = catalog.get(tool_name)
         if entry is None:
-            return {"error": f"Unknown or unavailable tool: {tool_name}"}
+            return {"error_code": "unknown_tool", "message": f"Unknown or unavailable tool: {tool_name}"}
         manager_tools = getattr(getattr(mcp, "_tool_manager", None), "_tools", {})
         runtime_tool = manager_tools.get(tool_name)
         if runtime_tool is None:
-            return {"error": f"Unknown or unavailable tool: {tool_name}"}
+            return {"error_code": "unknown_tool", "message": f"Unknown or unavailable tool: {tool_name}"}
         schema = copy.deepcopy(entry["inputSchema"])
         # Runtime descriptions can change after startup (currently git_manage).
         live_description = getattr(runtime_tool, "description", None)
@@ -144,7 +144,7 @@ def install(mcp: Any) -> None:
 
     # Register through the original FastMCP method so this meta-tool is not shortened.
     meta_description = "Get full documentation and argument details for a registered tool."
-    registered = original_tool(name="get_tool_details", description=meta_description)(get_tool_details)
+    original_tool(name="get_tool_details", description=meta_description)(get_tool_details)
     meta_tool = getattr(getattr(mcp, "_tool_manager", None), "_tools", {}).get("get_tool_details")
     catalog["get_tool_details"] = {
         "description": meta_description,

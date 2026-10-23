@@ -99,7 +99,8 @@ def _extract(source: bytes):
         name = _node_text(name_node, source) if name_node else ""
         if node.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
             n = node.child_by_field_name("name")
-            if n: namespace = _node_text(n, source)
+            if n:
+                namespace = _node_text(n, source)
         new_owners = owners + ((name,) if kind in types.values() else ())
         if kind and name:
             line1, line2 = node.start_point.row + 1, node.end_point.row + (0 if node.end_point.column == 0 else 1)
@@ -112,8 +113,10 @@ def _extract(source: bytes):
                 i = siblings.index(node)
                 if i and siblings[i-1].type == "comment":
                     prev = _node_text(siblings[i-1], source)
-                    if prev.startswith("///"): docs = prev
-            except (ValueError, AttributeError): pass
+                    if prev.startswith("///"):
+                        docs = prev
+            except (ValueError, AttributeError):
+                pass
             symbols.append({"name": name, "qualified_name": qname, "kind": kind, "namespace": namespace,
                 "containing_type": ".".join(owners) or None, "signature": signature, "docs": docs,
                 "start_line": line1, "end_line": line2, "source": txt,
@@ -174,11 +177,17 @@ def index_codebase(exclusions=None) -> dict:
     try:
         known = {r["path"]: r for r in con.execute("SELECT * FROM files")}
         for path in _files(root, exclusions):
-            rel = path.relative_to(root).as_posix(); present.add(rel); stats["scanned"] += 1
+            rel = path.relative_to(root).as_posix()
+            present.add(rel)
+            stats["scanned"] += 1
             try:
-                data = path.read_bytes(); digest = hashlib.sha256(data).hexdigest(); st = path.stat()
+                data = path.read_bytes()
+                digest = hashlib.sha256(data).hexdigest()
+                st = path.stat()
                 if rel in known and known[rel]["sha256"] == digest:
-                    con.execute("UPDATE files SET size=?,mtime=? WHERE path=?", (st.st_size, st.st_mtime, rel)); stats["skipped"] += 1; continue
+                    con.execute("UPDATE files SET size=?,mtime=? WHERE path=?", (st.st_size, st.st_mtime, rel))
+                    stats["skipped"] += 1
+                    continue
                 symbols, refs = _extract(data)
                 with con:
                     con.execute("DELETE FROM symbol_fts WHERE rowid IN (SELECT s.id FROM symbols s JOIN files f ON s.file_id=f.id WHERE f.path=?)", (rel,))
@@ -198,11 +207,13 @@ def index_codebase(exclusions=None) -> dict:
                         [(fid,r["target"],r["line"],r["kind"],r["snippet"],r["enclosing_type"],r["enclosing_method"]) for r in refs])
                 stats["parsed"] += 1
             except Exception as exc:
-                stats["failed"] += 1; stats["errors"].append({"path": rel, "message": str(exc)})
+                stats["failed"] += 1
+                stats["errors"].append({"path": rel, "message": str(exc)})
                 print(f"[handy-coder-mcp] C# index failed for {rel}: {exc}", file=sys.stderr)
                 # Preserve old rows on parse/read failure; record diagnostic when possible.
                 if rel not in known:
-                    with con: con.execute("INSERT OR IGNORE INTO files(path,sha256,size,mtime,indexed_at,error) VALUES(?,?,?,?,?,?)", (rel,"",0,0,time.time(),str(exc)))
+                    with con:
+                        con.execute("INSERT OR IGNORE INTO files(path,sha256,size,mtime,indexed_at,error) VALUES(?,?,?,?,?,?)", (rel,"",0,0,time.time(),str(exc)))
         stale = set(known) - present
         with con:
             for rel in stale:
@@ -234,8 +245,10 @@ def code_navigator(action: str, query: str | None = None, symbol: str | None = N
     _limit(limit)
     if action not in {"search_code", "get_symbol", "find_references"}:
         return {"error_code": "invalid_action", "message": "action must be search_code, get_symbol, or find_references"}
-    if action == "search_code" and not (query and query.strip()): return {"error_code":"missing_parameter","message":"query is required and cannot be empty"}
-    if action != "search_code" and not (symbol and symbol.strip()): return {"error_code":"missing_parameter","message":"symbol is required and cannot be empty"}
+    if action == "search_code" and not (query and query.strip()):
+        return {"error_code":"missing_parameter","message":"query is required and cannot be empty"}
+    if action != "search_code" and not (symbol and symbol.strip()):
+        return {"error_code":"missing_parameter","message":"symbol is required and cannot be empty"}
     con = _db()
     try:
         if action == "search_code":
@@ -264,17 +277,24 @@ def code_navigator(action: str, query: str | None = None, symbol: str | None = N
             sql = "SELECT s.*,f.path,f.id file_id FROM symbols s JOIN files f ON f.id=s.file_id WHERE lower(s.name)=lower(?)"
             params = [exact]
         if file_path:
-            try: rel = support.inside(file_path, must_exist=True).relative_to(Path(support.ROOT).resolve()).as_posix()
-            except (ValueError,OSError) as exc: return {"error_code":"inaccessible_file","message":str(exc)}
-            sql += " AND f.path=?"; params.append(rel)
+            try:
+                rel = support.inside(file_path, must_exist=True).relative_to(Path(support.ROOT).resolve()).as_posix()
+            except (ValueError,OSError) as exc:
+                return {"error_code":"inaccessible_file","message":str(exc)}
+            sql += " AND f.path=?"
+            params.append(rel)
         rows = con.execute(sql + " ORDER BY f.path,s.start_line", params).fetchall()
-        if len(rows) > 1: return {"error_code":"ambiguous_symbol","message":"Multiple symbols match; provide a qualified name or file_path","matches":[{"qualified_name":r["qualified_name"],"path":r["path"],"kind":r["kind"]} for r in rows[:20]]}
-        if not rows: return {"error_code":"symbol_not_found","message":f"No indexed symbol matches {exact}"}
+        if len(rows) > 1:
+            return {"error_code":"ambiguous_symbol","message":"Multiple symbols match; provide a qualified name or file_path","matches":[{"qualified_name":r["qualified_name"],"path":r["path"],"kind":r["kind"]} for r in rows[:20]]}
+        if not rows:
+            return {"error_code":"symbol_not_found","message":f"No indexed symbol matches {exact}"}
         row=rows[0]
         try:
             source_path = support.inside(row["path"], must_exist=True)
-            data=source_path.read_bytes(); digest=hashlib.sha256(data).hexdigest()
-        except (OSError,ValueError) as exc: return {"error_code":"inaccessible_file","message":str(exc)}
+            data=source_path.read_bytes()
+            digest=hashlib.sha256(data).hexdigest()
+        except (OSError,ValueError) as exc:
+            return {"error_code":"inaccessible_file","message":str(exc)}
         indexed_digest = con.execute("SELECT sha256 FROM files WHERE id=?", (row["file_id"],)).fetchone()[0]
         con.close()
         if digest != indexed_digest:
@@ -284,5 +304,7 @@ def code_navigator(action: str, query: str | None = None, symbol: str | None = N
         # Use fresh indexed range; stale-content equality was verified above.
         return {"name":row["name"],"qualified_name":row["qualified_name"],"kind":row["kind"],"path":row["path"],"start_line":row["start_line"],"end_line":row["end_line"],"signature":row["signature"],"source":"\n".join(lines[row["start_line"]-1:row["end_line"]]),"containing_type":row["containing_type"]}
     finally:
-        try: con.close()
-        except Exception: pass
+        try:
+            con.close()
+        except Exception:
+            pass

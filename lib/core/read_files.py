@@ -7,19 +7,22 @@ from ..support import inside, MAX_READ_BYTES, describe
 class LineRange(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(description="Workspace-relative file path; must match a value in paths.")
-    start_line: int = Field(ge=1, description="First line to include, using 1-based numbering.")
-    end_line: int = Field(ge=1, description="Last line to include, using 1-based numbering; must be greater than or equal to start_line.")
+    start_line: int | None = Field(default=None, ge=1, description="First line to include, using 1-based numbering. Required unless the deprecated start alias is supplied.")
+    end_line: int | None = Field(default=None, ge=1, description="Last line to include, using 1-based numbering; must be greater than or equal to start_line. Required unless the deprecated end alias is supplied.")
+    start: int | None = Field(default=None, ge=1, description="Deprecated alias for start_line.")
+    end: int | None = Field(default=None, ge=1, description="Deprecated alias for end_line.")
 
-    @model_validator(mode="before")
-    @classmethod
-    def accept_legacy_keys(cls, value):
-        if isinstance(value, dict):
-            value = dict(value)
-            if "start" in value and "start_line" not in value:
-                value["start_line"] = value.pop("start")
-            if "end" in value and "end_line" not in value:
-                value["end_line"] = value.pop("end")
-        return value
+    @model_validator(mode="after")
+    def resolve_aliases(self):
+        if self.start_line is None:
+            self.start_line = self.start
+        if self.end_line is None:
+            self.end_line = self.end
+        if self.start_line is None or self.end_line is None:
+            raise ValueError("line ranges require start_line and end_line (deprecated aliases: start, end)")
+        if self.end_line < self.start_line:
+            raise ValueError("end_line must be greater than or equal to start_line")
+        return self
 
 
 def read_files(
@@ -64,7 +67,7 @@ def read_files(
             file_errors.append({
                 "path": name,
                 "error_code": "path_escape",
-                "message": f"Path escapes authorized workspace root: {name}",
+                "message": support.path_escape_message(name),
             })
             continue
         except OSError as exc:

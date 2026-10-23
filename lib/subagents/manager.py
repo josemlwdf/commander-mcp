@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from .roles import Role
@@ -211,7 +211,7 @@ class SubagentManager:
             if tool_name not in frame.role.allowed_tools and tool_name not in {"subagent_complete", "subagent_cancel"}:
                 return False, (
                     f"Tool '{tool_name}' is outside role allowlist for open subagent frame {frame.task_id}. "
-                    "Call subagent_complete when done."
+                    "Call subagent_complete when done, or call subagent_cancel with confirm=true to discard the frame."
                 )
             if tool_name == "subagent_run":
                 return False, "subagent nesting depth is limited to 1; finish current frame first"

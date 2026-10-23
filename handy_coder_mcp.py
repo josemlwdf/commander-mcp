@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, os, sys
+import argparse
+import sys
 from pathlib import Path
 
 from lib import ide_detector
@@ -33,19 +34,21 @@ def _load_fastmcp():
         raise SystemExit(1) from exc
     return FastMCP
 
-from lib import support, worker_supervisor
-from lib import tool_details
-from lib.core import (
+# Imports below intentionally follow _load_fastmcp(); E402 is suppressed per line.
+from lib import support, worker_supervisor  # noqa: E402
+from lib import tool_details  # noqa: E402
+from lib import error_handler  # noqa: E402
+from lib.core import (  # noqa: E402
     read_files, create_file, apply_edits, terminal_exec, code_search, find_files,
     diagnostics, run_tests, git_manage, build_project, commit_nudge, system_info, skills, orchestrator_bootstrap, orchestrator_tasks,
 )
-from lib.core import code_navigator
-from lib.core import web_search_tool
-from lib.core import html_syntax_check
-from lib.extras import (
+from lib.core import code_navigator  # noqa: E402
+from lib.core import web_search_tool  # noqa: E402
+from lib.core import html_syntax_check  # noqa: E402
+from lib.extras import (  # noqa: E402
     code_format_lint, web_fetch,
 )
-from lib.subagents import tools as subagent_tools
+from lib.subagents import tools as subagent_tools  # noqa: E402
 
 
 def _assert_tool_argument_types_known(mcp) -> None:
@@ -110,6 +113,7 @@ def main() -> None:
         raise SystemExit(1) from exc
 
     worker_supervisor.supervise_fastmcp_tools(mcp)
+    error_handler.install(mcp)
     mcp.run(transport="stdio")
 
 

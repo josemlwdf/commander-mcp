@@ -36,14 +36,22 @@ class _Checker(HTMLParser):
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
         line = self.getpos()[0]
-        if tag == "li" and self.stack and self.stack[-1][0] == "li": self.stack.pop()
-        if tag in {"dt", "dd"} and self.stack and self.stack[-1][0] in {"dt", "dd"}: self.stack.pop()
-        if tag == "option" and self.stack and self.stack[-1][0] == "option": self.stack.pop()
-        if tag in {"td", "th"} and self.stack and self.stack[-1][0] in {"td", "th"}: self.stack.pop()
-        if tag == "tr" and self.stack and self.stack[-1][0] == "tr": self.stack.pop()
-        if tag in {"thead", "tbody", "tfoot"} and self.stack and self.stack[-1][0] in {"thead", "tbody", "tfoot"}: self.stack.pop()
-        if tag in _P_CLOSES_ON_START and self.stack and self.stack[-1][0] == "p": self.stack.pop()
-        if tag not in VOID_ELEMENTS: self.stack.append((tag, line))
+        if tag == "li" and self.stack and self.stack[-1][0] == "li":
+            self.stack.pop()
+        if tag in {"dt", "dd"} and self.stack and self.stack[-1][0] in {"dt", "dd"}:
+            self.stack.pop()
+        if tag == "option" and self.stack and self.stack[-1][0] == "option":
+            self.stack.pop()
+        if tag in {"td", "th"} and self.stack and self.stack[-1][0] in {"td", "th"}:
+            self.stack.pop()
+        if tag == "tr" and self.stack and self.stack[-1][0] == "tr":
+            self.stack.pop()
+        if tag in {"thead", "tbody", "tfoot"} and self.stack and self.stack[-1][0] in {"thead", "tbody", "tfoot"}:
+            self.stack.pop()
+        if tag in _P_CLOSES_ON_START and self.stack and self.stack[-1][0] == "p":
+            self.stack.pop()
+        if tag not in VOID_ELEMENTS:
+            self.stack.append((tag, line))
 
     def handle_startendtag(self, tag, attrs):
         pass
@@ -58,10 +66,12 @@ class _Checker(HTMLParser):
             if self.stack[index][0] == tag:
                 intervening = self.stack[index + 1:]
                 for name, opened in intervening:
-                    if name not in OPTIONAL_END: self.add(f"Unclosed <{name}> opened here", opened)
+                    if name not in OPTIONAL_END:
+                        self.add(f"Unclosed <{name}> opened here", opened)
                 del self.stack[index:]
                 return
-        if tag not in OPTIONAL_END: self.add(f"Unmatched </{tag}>", line)
+        if tag not in OPTIONAL_END:
+            self.add(f"Unmatched </{tag}>", line)
 
     def unknown_decl(self, data):
         self.add(f"Malformed declaration <!{data}>")
@@ -82,7 +92,8 @@ def check_html(content: str) -> dict:
     offset = 0
     while True:
         start = content.find("<!--", offset)
-        if start < 0: break
+        if start < 0:
+            break
         end = content.find("-->", start + 4)
         if end < 0:
             checker.add("Unclosed HTML comment", content.count("\n", 0, start) + 1)

@@ -5,3 +5,7 @@ node_modules/
 dist/
 tmp
 /.handy-coder/code_index.sqlite3
+.handy-coder/
+tmp/
+.pytest_cache/
+.ruff_cache/

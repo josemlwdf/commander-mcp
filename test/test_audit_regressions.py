@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from lib import code_index, support, tool_details, worker_supervisor
-from lib.core import apply_edits, build_project, create_file, diagnostics, find_files, git_manage, orchestrator_tasks, read_files, run_tests, skills, system_info, web_search_tool
+from lib.core import apply_edits, build_project, diagnostics, find_files, git_manage, orchestrator_tasks, read_files, run_tests, skills, system_info, web_search_tool
 from lib.extras import code_format_lint, web_fetch
 from lib.subagents import tools as subagent_tools
 

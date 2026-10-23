@@ -65,6 +65,10 @@ def get_capabilities() -> dict:
             "estimated_checks": ["package.json typecheck/check/lint scripts", "pyproject Ruff/mypy", "Makefile check/lint/typecheck/validate targets"],
             "note": "detects and runs the first configured installed check",
         },
+        "web_search": {"available": True, "note": "searches the public web via DuckDuckGo Lite and returns titles, snippets, and links; requires outbound network access"},
+        "index_codebase": {"available": True, "note": "incrementally indexes local C# files into .handy-coder/code_index.sqlite3 (Tree-sitter and SQLite FTS5); run it before code_navigator; failures return error_code index_unavailable"},
+        "code_navigator": {"available": True, "note": "search_code, get_symbol, or find_references over the local C# index; find_references is syntactic, not compiler-resolved; returns a hint when the index is empty"},
+        "get_tool_details": {"available": True, "note": "returns full documentation and argument details for one registered tool; unknown names return error_code unknown_tool"},
         # Extras
         "code_format_lint": {
             "available": any([ruff_ok, black_ok, eslint_ok, jsbeautifier_ok]),

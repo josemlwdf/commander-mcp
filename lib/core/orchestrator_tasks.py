@@ -82,7 +82,7 @@ def orchestrator_update_task_status(
     except FileNotFoundError:
         return _error("not_found", f"Task tracker file not found: {tasks_path}")
     except ValueError:
-        return _error("path_escape", f"Path escapes authorized workspace root: {tasks_path}")
+        return _error("path_escape", support.path_escape_message(tasks_path))
 
     if not path.is_file():
         return _error("not_a_file", f"Task tracker path is not a file: {tasks_path}")

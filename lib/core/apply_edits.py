@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
-from ..support import inside, describe
+from ..support import inside, describe, path_escape_message
 from ..utils.html_prettify import prettify_html
 
 
@@ -74,7 +74,7 @@ def apply_edits(
         except FileNotFoundError:
             return _edit_error("not_found", edit_index, f"File not found: {name}", dry_run)
         except ValueError:
-            return _edit_error("path_escape", edit_index, f"Path escapes authorized workspace root: {name}", dry_run)
+            return _edit_error("path_escape", edit_index, path_escape_message(name), dry_run)
         except OSError as exc:
             # strerror only: str(exc) embeds the absolute host path.
             return _edit_error("io_error", edit_index, f"{exc.strerror or 'File could not be accessed'}: {name}", dry_run)
@@ -236,7 +236,9 @@ def apply_edits(
                     pass
             raise RuntimeError(f"Write failed; all edits rolled back: {exc}") from exc
 
-    response = {"edits": results, "files": files, "dry_run": dry_run}
+    root = inside(".")
+    written_files = [Path(key).relative_to(root).as_posix() for key in written]
+    response = {"edits": results, "files": files, "written_files": written_files, "dry_run": dry_run}
     if max_replacements is not None and not replace_all:
         response["warning"] = "max_replacements was supplied but is ignored unless replace_all=true."
     if any(Path(path).suffix.lower() == ".py" and _adds_import(original_contents[path], new_text)
@@ -268,6 +270,6 @@ def register(mcp):
         "Error messages include the zero-based edit index ([edit N]) for easy identification. "
         "Edit failures return error_code (invalid_regex, invalid_replacement, no_match, not_found, path_escape, not_a_file, binary_file, io_error, invalid_edit) "
         "with edit_index and message instead of raising; nothing is written. "
-        "Each edit result includes matches (count of replacements made) and its edit diff. Changed HTML files are prettified once after staging and are summarized in files with one original-to-final diff and formatter status per file; dry runs preview this without writing. A dependency_hint is returned only when an edit adds a Python import. "
+        "Each edit result includes matches (count of replacements made) and its edit diff. Changed HTML files are prettified once after staging and are summarized in files with one original-to-final diff and formatter status per file; dry runs preview this without writing. written_files lists the workspace-relative paths of files actually written to disk (only files whose content changed; always empty on dry_run), whereas files only summarizes HTML prettification. A dependency_hint is returned only when an edit adds a Python import. "
         "Returns unified diffs. When to use: Make localized changes."
     ))(apply_edits)

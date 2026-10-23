@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import re
 import shutil
 import stat
 import time
@@ -7,7 +8,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from ..support import inside, run_process, describe
+from ..support import inside, run_process, describe, path_escape_message
 
 
 _REPOSITORIES: tuple[str, ...] | None = None
@@ -275,20 +276,27 @@ def git_manage(
         arg.startswith("-") and arg not in ("--cached", "--stat", "--name-only", "--")
         for arg in args
     ):
-        raise ValueError("Unsupported diff option")
+        bad = next(
+            arg for arg in args
+            if arg.startswith("-") and arg not in ("--cached", "--stat", "--name-only", "--")
+        )
+        raise ValueError(
+            f"Unsupported diff option: '{bad}'. "
+            "Allowed flags: --cached, --stat, --name-only, and '--' (separator before file paths)"
+        )
     if action == "log" and any(
         arg.startswith("-") and arg not in ("-n", "--oneline", "--decorate", "--all", "--")
-        and not arg.isdigit()
+        and not re.fullmatch(r"-\d+", arg)
         for arg in args
     ):
         bad = next(
             arg for arg in args
             if arg.startswith("-") and arg not in ("-n", "--oneline", "--decorate", "--all", "--")
-            and not arg.isdigit()
+            and not re.fullmatch(r"-\d+", arg)
         )
         raise ValueError(
             f"Unsupported log option: '{bad}'. "
-            "Allowed flags: -n <count>, --oneline, --decorate, --all, --"
+            "Allowed flags: -n <count>, -<count> (e.g. -3), --oneline, --decorate, --all, and '--' (separator before file paths)"
         )
     if action == "commit":
         if not args or "-m" not in args or args.count("-m") != 1 or args.index("-m") == len(args) - 1:
@@ -329,7 +337,7 @@ def git_manage(
             try:
                 inside(arg)
             except ValueError:
-                return {"supported": True, "error_code": "path_escape", "message": f"Git argument escapes workspace: {arg}", "path": arg, "exit_code": 1}
+                return {"supported": True, "error_code": "path_escape", "message": path_escape_message(arg), "path": arg, "exit_code": 1}
 
     git = shutil.which("git")
     if not git:
@@ -347,7 +355,7 @@ def git_manage(
             try:
                 init_path = inside(repo_path)
             except ValueError:
-                return {"supported": True, "error_code": "path_escape", "message": f"Repository path escapes authorized workspace: {repo_path}", "path": repo_path, "exit_code": 1}
+                return {"supported": True, "error_code": "path_escape", "message": path_escape_message(repo_path), "path": repo_path, "exit_code": 1}
             init_path.mkdir(parents=True, exist_ok=True)
             if not init_path.is_dir():
                 raise ValueError(f"repo_path for init must be a directory: {repo_path}")
@@ -379,11 +387,11 @@ def git_manage(
     if repo_path:
         requested_path = Path(repo_path)
         if requested_path.is_absolute():
-            return {"supported": True, "error_code": "path_escape", "message": "repo_path must be relative to the authorized workspace", "path": repo_path, "exit_code": 1}
+            return {"supported": True, "error_code": "path_escape", "message": path_escape_message(repo_path), "path": repo_path, "exit_code": 1}
         try:
             selected_path = inside(repo_path, must_exist=True)
         except ValueError:
-            return {"supported": True, "error_code": "path_escape", "message": f"Repository path escapes authorized workspace: {repo_path}", "path": repo_path, "exit_code": 1}
+            return {"supported": True, "error_code": "path_escape", "message": path_escape_message(repo_path), "path": repo_path, "exit_code": 1}
         except FileNotFoundError:
             return {"supported": True, "error_code": "not_found", "message": f"Repository path not found: {repo_path}", "path": repo_path, "exit_code": 1}
         relative_path = selected_path.relative_to(inside(".")).as_posix() or "."
@@ -487,9 +495,17 @@ def git_manage(
     # Resolve file operands explicitly from the selected repository. This avoids
     # Git's cwd-dependent interpretation changing when repo_path is supplied.
     git_args = list(args)
+    if action == "log":
+        # Rewrite the -<N> shorthand (e.g. -3) to ['-n', '3']; anything after '--' is a path.
+        sep = git_args.index("--") if "--" in git_args else len(git_args)
+        git_args = [
+            part for a in git_args[:sep]
+            for part in (["-n", a[1:]] if re.fullmatch(r"-\d+", a) else [a])
+        ] + git_args[sep:]
     if action == "diff":
         git_args = [arg for arg in git_args if arg != "--cached"]
-        if mode == "staged": git_args.insert(0, "--cached")
+        if mode == "staged":
+            git_args.insert(0, "--cached")
         elif mode == "both":
             # Both passes are combined below so staged and unstaged raw text is preserved.
             pass
@@ -510,7 +526,7 @@ def git_manage(
         try:
             resolved.relative_to(selected_path.resolve())
         except ValueError:
-            return {"supported": True, "error_code": "path_escape", "message": f"Git path escapes selected repository: {git_args[index]}", "path": git_args[index], "exit_code": 1}
+            return {"supported": True, "error_code": "path_escape", "message": path_escape_message(git_args[index]), "path": git_args[index], "exit_code": 1}
         if not resolved.exists() and not (action == "diff" and resolved.parent.exists()):
             return {"supported": True, "error_code": "not_found", "message": f"Git path not found: {git_args[index]}", "path": git_args[index], "exit_code": 1}
         git_args[index] = str(resolved)
@@ -536,7 +552,7 @@ def git_manage(
         result["working_tree"] = [item for item in entries if item["worktree"] != " " or item["untracked"]]
         result["staged"] = [item for item in entries if item["index"] not in (" ", "?")]
         result["untracked_files"] = [item["path"] for item in entries if item["untracked"]]
-        result["untracked_summary"] = {"count": len(result["untracked_files"]), "files": result["untracked_files"]}
+        result["untracked_summary"] = {"count": len(result["untracked_files"])}
     elif action == "log" and result.get("exit_code") == 0:
         history_args = list(git_args)
         separator = history_args.index("--") if "--" in history_args else len(history_args)

@@ -7,7 +7,15 @@ from .. import code_index
 from ..support import describe
 
 
-def index_codebase(exclude_dirs: list[str] | None = None) -> dict:
+def index_codebase(
+    exclude_dirs: Annotated[
+        list[str] | None,
+        Field(description=(
+            "Optional directory names to skip in addition to the default exclusions (they add to, and do not replace, the defaults). "
+            "Default exclusions: " + ", ".join(sorted(code_index.DEFAULT_EXCLUDES)) + "."
+        )),
+    ] = None,
+) -> dict:
     """Incrementally scan C# files into the per-workspace index."""
     try:
         return code_index.index_codebase(exclusions=exclude_dirs)

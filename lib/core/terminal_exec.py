@@ -12,9 +12,9 @@ def terminal_exec(
     stdin: Annotated[str | None, Field(description="Optional text sent to standard input, then closed.")] = None,
     shell: Annotated[str | None, Field(description="Optional shell executable override for this call; defaults to the configured shell.")] = None,
 ) -> dict:
-    work = inside(cwd or ".", must_exist=True)
     if not command.strip():
         raise ValueError("command cannot be empty")
+    work = inside(cwd or ".", must_exist=True)
     return run_process(command, cwd=work, timeout_ms=timeout_ms, shell=True, env=env, stdin=stdin, shell_executable=shell)
 
 

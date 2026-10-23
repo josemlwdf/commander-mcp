@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,7 +94,19 @@ _IGNORE_PATH_PATTERNS = (
     "build/**",
     "**/__pycache__/**",
     "**/generated/**",
+    ".handy-coder/**",
+    "**/*.sqlite3",
+    "*.sqlite3",
 )
+
+
+class _CommitterDisabled(Exception):
+    """Raised internally when the opt-in committer subagent is not enabled."""
+
+
+def _committer_enabled() -> bool:
+    """The committer subagent opens a restrictive frame, so it is opt-in (default off)."""
+    return os.environ.get("HANDY_CODER_COMMIT_SUBAGENT", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _approx_tokens(state: CommitTrackerState) -> int:
@@ -360,6 +373,8 @@ def _append_nudge(result: Any, level: NudgeLevel, reason: NudgeReason | None, me
     from ..subagents.tools import subagent_run
 
     try:
+        if not _committer_enabled():
+            raise _CommitterDisabled()
         task = subagent_run(
             role="committer",
             task="Review the repository .gitignore and add missing ignore rules for generated artifacts when needed, then review and commit the current workspace changes when they form a safe, coherent checkpoint. Do not push. If unrelated changes are present, leave the worktree untouched and report that no commit was made.",
@@ -376,6 +391,11 @@ def _append_nudge(result: Any, level: NudgeLevel, reason: NudgeReason | None, me
             f"[commit-action] Commit subagent started (task {task_id}); no push requested. "
             "Review .gitignore and add missing generated artifact rules when needed."
         )
+    except _CommitterDisabled:
+        # Text-only nudge: no subagent task or frame is created.
+        task_id = None
+        status = "disabled"
+        message = _format_nudge(level, reason, metrics, state)
     except Exception as exc:  # noqa: BLE001
         task_id = None
         status = "failed"

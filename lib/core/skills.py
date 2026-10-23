@@ -232,7 +232,8 @@ def skills_manage(
         return listed
     if action == "delete":
         problem = _validate_name(name)
-        if problem: return problem
+        if problem:
+            return problem
         if name in BASELINE_SKILLS:
             return _error("protected_skill", f"Baseline skill cannot be deleted: {name}")
         if not confirm:

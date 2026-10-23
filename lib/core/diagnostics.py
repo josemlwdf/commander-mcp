@@ -1,4 +1,5 @@
-import json, tomllib
+import json
+import tomllib
 import os
 import shutil
 from pathlib import Path
@@ -39,7 +40,7 @@ def code_get_diagnostics(
                 "message": f"Workspace path not found: {path}", "path": path}
     except ValueError:
         return {"supported": False, "ok": False, "error_code": "path_escape",
-                "message": f"Path escapes authorized workspace: {path}", "path": path}
+                "message": support.path_escape_message(path), "path": path}
     candidates = []
     detection_trace: list[dict[str, str]] = []
     skipped: list[dict] = []

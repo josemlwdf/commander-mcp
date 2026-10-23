@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field
-from ..support import inside, run_process, describe, setup_required
+from ..support import inside, run_process, describe, setup_required, path_escape_message
 
 def _has_python_test_setup(root) -> bool:
     if any((root / name).is_file() for name in ("pytest.ini",)):
@@ -215,7 +215,7 @@ def run_tests(
                     "message": f"Test filter path not found: {filter_path}", "path": filter_path}
         except ValueError:
             return {"supported": False, "error_code": "path_escape",
-                    "message": f"Path escapes authorized workspace: {filter_path}", "path": filter_path}
+                    "message": path_escape_message(filter_path), "path": filter_path}
         if not target.is_file() and not target.is_dir():
             return {"supported": False, "error_code": "not_a_file_or_directory",
                     "message": f"Test filter path is not a file or directory: {filter_path}", "path": filter_path}

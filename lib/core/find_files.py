@@ -1,5 +1,6 @@
-import fnmatch, time
-from typing import Annotated
+import fnmatch
+import time
+from typing import Annotated, Literal
 
 from pydantic import Field
 from ..support import describe, iter_workspace_files
@@ -38,7 +39,7 @@ def find_files(
     file_type: Annotated[str | None, Field(description="Optional extension filter such as .py; file selects all file types.")] = None,
     min_size: Annotated[int | None, Field(ge=0, description="Optional minimum file size in bytes; files only.")] = None,
     max_size: Annotated[int | None, Field(ge=0, description="Optional maximum file size in bytes; files only.")] = None,
-    sort_by: Annotated[str, Field(description="Sort results by path (default), size, or modified time.")] = "path",
+    sort_by: Annotated[Literal["path", "size", "modified"], Field(description="Sort results by path (default), size, or modified (last-modified time).")] = "path",
     include_metadata: Annotated[bool, Field(description="Include size_bytes and modified_time per result.")] = False,
 ) -> dict:
     if not glob_pattern:
