@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import difflib
-import importlib.util
 import os
 import shutil
 from pathlib import Path
@@ -235,10 +234,24 @@ def code_format_lint(
             ruff = _python_tool_path("ruff", root)
             black = _python_tool_path("black", root)
             if ruff:
+                ruff_config_args = ["--config", config_path] if config_path else []
+                ruff_ignore_args = ["--ignore", ",".join(ignore)] if ignore else []
+                ruff_check_args = (
+                    ["check"]
+                    + (["--fix"] if fix else [])
+                    + ruff_config_args
+                    + ruff_ignore_args
+                    + args
+                )
                 tools_run.append("ruff")
-                reports.append({"tool": "ruff", **_run(ruff, ["check", *(["--fix"] if fix else []), *args], root)})
+                reports.append({"tool": "ruff", **_run(ruff, ruff_check_args, root)})
                 tools_run.append("ruff-format")
-                format_args = ["format", *([] if fix else ["--check"]), *args]
+                format_args = (
+                    ["format"]
+                    + ([] if fix else ["--check"])
+                    + ruff_config_args
+                    + args
+                )
                 reports.append({"tool": "ruff-format", **_run(ruff, format_args, root)})
                 if not black:
                     tools_skipped.append(_skipped("black"))
