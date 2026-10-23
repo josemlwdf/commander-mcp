@@ -1,6 +1,7 @@
 import inspect
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import get_args, get_type_hints
 
 from pydantic import BaseModel, TypeAdapter
@@ -228,6 +229,15 @@ class ToolSchemaTests(unittest.TestCase):
                 with self.subTest(tool=name, argument=parameter):
                     schema = TypeAdapter(hints[parameter]).json_schema()
                     check_schema(schema, f"{name}.{parameter}")
+
+    def test_main_server_assertion_rejects_unknown_exposed_argument_types(self):
+        from handy_coder_mcp import _assert_tool_argument_types_known
+
+        mcp = SimpleNamespace(_tool_manager=SimpleNamespace(_tools={
+            "unknown_argument": SimpleNamespace(parameters={"properties": {"value": {"type": "unknown"}}}),
+        }))
+        with self.assertRaisesRegex(AssertionError, "unknown_argument"):
+            _assert_tool_argument_types_known(mcp)
 
     def test_audited_collection_shapes_and_position_keys_are_documented(self):
         env_schema = TypeAdapter(get_type_hints(terminal_exec.terminal_exec, include_extras=True)["env"]).json_schema()

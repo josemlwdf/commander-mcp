@@ -93,7 +93,14 @@ def build_project(
     root = inside(".")
     candidates = _discover(root)
     if path is not None:
-        selected = inside(path, must_exist=True)
+        try:
+            selected = inside(path, must_exist=True)
+        except ValueError:
+            return {"success": False, "supported": False, "error_code": "path_escape",
+                    "message": f"Path escapes authorized workspace: {path}", "path": path}
+        except FileNotFoundError:
+            return {"success": False, "supported": False, "error_code": "not_found",
+                    "message": f"Workspace path not found: {path}", "path": path}
         selected_file = not selected.is_dir()
         selected_name = selected.name
         if selected_file and selected.name in {item["configuration"] for item in candidates}:
@@ -101,7 +108,10 @@ def build_project(
         if not selected.is_dir(): raise ValueError("path must select a project directory or configuration file")
         rel = selected.relative_to(root).as_posix() or "."
         candidates = [item for item in candidates if item["path"] == rel and (not selected_file or item["configuration"] == selected_name)]
-        if not candidates: raise ValueError(f"No supported project configuration found at '{rel}'")
+        if not candidates:
+            return {"success": False, "supported": False, "error_code": "project_not_found",
+                    "message": f"No supported project configuration found at '{rel}'.",
+                    "target": rel, "choices": []}
     if not candidates:
         return {"success": False, "supported": False, "error_code": "project_not_found", "message": "No supported Python, Node, or .NET project configuration was found.", "choices": []}
     if len(candidates) > 1:

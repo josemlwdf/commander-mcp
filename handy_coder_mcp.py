@@ -48,6 +48,31 @@ from lib.extras import (
 from lib.subagents import tools as subagent_tools
 
 
+def _assert_tool_argument_types_known(mcp) -> None:
+    """Fail startup if a registered JSON schema exposes an unknown argument type."""
+    registered = getattr(getattr(mcp, "_tool_manager", None), "_tools", {})
+    unknown = []
+
+    def visit(schema, location: str) -> None:
+        if isinstance(schema, dict):
+            if schema.get("type") == "unknown":
+                unknown.append(location)
+            for key, value in schema.items():
+                if isinstance(value, dict):
+                    visit(value, f"{location}.{key}")
+                elif isinstance(value, list):
+                    for index, item in enumerate(value):
+                        visit(item, f"{location}.{key}[{index}]")
+
+    for name, tool in registered.items():
+        schema = getattr(tool, "parameters", None) or getattr(tool, "input_schema", None)
+        if schema is None:
+            unknown.append(f"{name}.<schema>")
+        else:
+            visit(schema, name)
+    assert not unknown, "MCP tool arguments have unknown JSON Schema types: " + ", ".join(unknown)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Workspace-confined Handy Coder MCP server")
     parser.add_argument("-r", "--root", default=None, help="Authorized workspace root")
@@ -73,6 +98,7 @@ def main() -> None:
         code_format_lint, web_fetch, web_search_tool, system_info, skills, orchestrator_bootstrap, orchestrator_tasks, subagent_tools, code_navigator,
     ):
         module.register(mcp)
+    _assert_tool_argument_types_known(mcp)
 
     try:
         result = code_navigator.index_codebase()

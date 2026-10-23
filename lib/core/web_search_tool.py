@@ -121,8 +121,6 @@ def search(query: str) -> list:
             return [{"error": "Rate limited or bot detection triggered by DuckDuckGo."}]
 
         results = parse_results(page)
-        for r in results:
-            r["_optimized_query"] = optimized
         return results
     except Exception as e:
         return [{"error": f"Request failed: {str(e)}"}]

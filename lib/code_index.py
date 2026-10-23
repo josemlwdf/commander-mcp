@@ -233,19 +233,29 @@ def code_navigator(action: str, query: str | None = None, symbol: str | None = N
                    file_path: str | None = None, limit: int = 10) -> dict:
     _limit(limit)
     if action not in {"search_code", "get_symbol", "find_references"}:
-        return {"error": "invalid_action", "message": "action must be search_code, get_symbol, or find_references"}
-    if action == "search_code" and not (query and query.strip()): return {"error":"missing_parameter","message":"query is required and cannot be empty"}
-    if action != "search_code" and not (symbol and symbol.strip()): return {"error":"missing_parameter","message":"symbol is required and cannot be empty"}
+        return {"error_code": "invalid_action", "message": "action must be search_code, get_symbol, or find_references"}
+    if action == "search_code" and not (query and query.strip()): return {"error_code":"missing_parameter","message":"query is required and cannot be empty"}
+    if action != "search_code" and not (symbol and symbol.strip()): return {"error_code":"missing_parameter","message":"symbol is required and cannot be empty"}
     con = _db()
     try:
         if action == "search_code":
             expr = _fts_query(query or "")
-            if not expr: return {"results": []}
+            if not expr:
+                count = con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+                return {"results": [], **({"hint": "Index is empty; run index_codebase to index C# files."} if not count else {})}
             rows = con.execute("SELECT s.*,f.path,bm25(symbol_fts,8.0,6.0,5.0,2.0,1.0,0.7) rank FROM symbol_fts JOIN symbols s ON s.id=symbol_fts.rowid JOIN files f ON f.id=s.file_id WHERE symbol_fts MATCH ? ORDER BY CASE WHEN lower(s.name)=lower(?) THEN 0 WHEN lower(s.qualified_name)=lower(?) THEN 1 ELSE 2 END, rank LIMIT ?", (expr,query.strip().split(".")[-1],query.strip(),limit)).fetchall()
-            return {"results":[{"name":r["name"],"qualified_name":r["qualified_name"],"kind":r["kind"],"path":r["path"],"start_line":r["start_line"],"end_line":r["end_line"],"signature":r["signature"],"snippet":r["source"][:300],"score":round(-r["rank"],4)} for r in rows]}
+            count = con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+            results = [{"name":r["name"],"qualified_name":r["qualified_name"],"kind":r["kind"],"path":r["path"],"start_line":r["start_line"],"end_line":r["end_line"],"signature":r["signature"],"snippet":r["source"][:300]} for r in rows]
+            return {"results": results, **({"hint": "Index is empty; run index_codebase to index C# files."} if not count else {})}
         if action == "find_references":
-            rows = con.execute("SELECT r.*,f.path FROM references_ r JOIN files f ON f.id=r.file_id WHERE lower(r.target)=lower(?) ORDER BY f.path,r.line LIMIT ?", (symbol.split(".")[-1],limit)).fetchall()
-            return {"reference_type":"likely syntactic usages; not compiler-resolved","symbol":symbol,"references":[dict(r) for r in rows]}
+            rows = con.execute("SELECT r.*,f.path FROM references_ r JOIN files f ON f.id=r.file_id WHERE lower(r.target)=lower(?) ORDER BY f.path,r.line LIMIT ?", (symbol.split(".")[-1],limit * 3)).fetchall()
+            unique = {}
+            for row in rows:
+                key = (row["file_id"], row["line"], row["snippet"])
+                unique.setdefault(key, {name: row[name] for name in (
+                    "path", "target", "line", "kind", "snippet", "enclosing_type", "enclosing_method"
+                )})
+            return {"reference_type":"likely syntactic usages; not compiler-resolved","symbol":symbol,"references":list(unique.values())[:limit]}
         exact = symbol.strip()
         if "." in exact:
             sql = "SELECT s.*,f.path,f.id file_id FROM symbols s JOIN files f ON f.id=s.file_id WHERE lower(s.qualified_name)=lower(?)"
@@ -255,16 +265,16 @@ def code_navigator(action: str, query: str | None = None, symbol: str | None = N
             params = [exact]
         if file_path:
             try: rel = support.inside(file_path, must_exist=True).relative_to(Path(support.ROOT).resolve()).as_posix()
-            except (ValueError,OSError) as exc: return {"error":"inaccessible_file","message":str(exc)}
+            except (ValueError,OSError) as exc: return {"error_code":"inaccessible_file","message":str(exc)}
             sql += " AND f.path=?"; params.append(rel)
         rows = con.execute(sql + " ORDER BY f.path,s.start_line", params).fetchall()
-        if len(rows) > 1: return {"error":"ambiguous_symbol","message":"Multiple symbols match; provide a qualified name or file_path","matches":[{"qualified_name":r["qualified_name"],"path":r["path"],"kind":r["kind"]} for r in rows[:20]]}
-        if not rows: return {"error":"symbol_not_found","message":f"No indexed symbol matches {exact}"}
+        if len(rows) > 1: return {"error_code":"ambiguous_symbol","message":"Multiple symbols match; provide a qualified name or file_path","matches":[{"qualified_name":r["qualified_name"],"path":r["path"],"kind":r["kind"]} for r in rows[:20]]}
+        if not rows: return {"error_code":"symbol_not_found","message":f"No indexed symbol matches {exact}"}
         row=rows[0]
         try:
             source_path = support.inside(row["path"], must_exist=True)
             data=source_path.read_bytes(); digest=hashlib.sha256(data).hexdigest()
-        except (OSError,ValueError) as exc: return {"error":"inaccessible_file","message":str(exc)}
+        except (OSError,ValueError) as exc: return {"error_code":"inaccessible_file","message":str(exc)}
         indexed_digest = con.execute("SELECT sha256 FROM files WHERE id=?", (row["file_id"],)).fetchone()[0]
         con.close()
         if digest != indexed_digest:

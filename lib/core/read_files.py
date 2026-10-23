@@ -1,14 +1,25 @@
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .. import support
 from ..support import inside, MAX_READ_BYTES, describe
 
 class LineRange(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(description="Workspace-relative file path; must match a value in paths.")
-    start: int = Field(ge=1, description="First line to include, using 1-based numbering.")
-    end: int = Field(ge=1, description="Last line to include, using 1-based numbering; must be greater than or equal to start.")
+    start_line: int = Field(ge=1, description="First line to include, using 1-based numbering.")
+    end_line: int = Field(ge=1, description="Last line to include, using 1-based numbering; must be greater than or equal to start_line.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_keys(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            if "start" in value and "start_line" not in value:
+                value["start_line"] = value.pop("start")
+            if "end" in value and "end_line" not in value:
+                value["end_line"] = value.pop("end")
+        return value
 
 
 def read_files(
@@ -18,7 +29,7 @@ def read_files(
     ],
     line_ranges: Annotated[
         list[LineRange] | None,
-        Field(description="Optional 1-based line ranges for selected files. Each range is an object with keys: path (must match a path in paths), start (first line) and end (last line, >= start); files without a range are read in full."),
+        Field(description="Optional 1-based line ranges, for example [{path: 'src/app.py', start_line: 4, end_line: 6}]. Legacy start/end keys are accepted; files without a range are read in full."),
     ] = None,
     start_line: Annotated[int | None, Field(ge=1, description="Shorthand first line for a single file; requires end_line.")] = None,
     end_line: Annotated[int | None, Field(ge=1, description="Shorthand last line for a single file; requires start_line.")] = None,
@@ -31,9 +42,12 @@ def read_files(
         raise ValueError("start_line and end_line must be supplied together")
     if start_line is not None and len(paths) != 1:
         raise ValueError("start_line/end_line shorthand requires exactly one path")
-    ranges = {r.path: r for r in (line_ranges or [])}
+    ranges = {}
+    for item in line_ranges or []:
+        range_item = item if isinstance(item, LineRange) else LineRange.model_validate(item)
+        ranges[range_item.path] = range_item
     if start_line is not None:
-        ranges[paths[0]] = LineRange(path=paths[0], start=start_line, end=end_line)
+        ranges[paths[0]] = LineRange(path=paths[0], start_line=start_line, end_line=end_line)
     output = []
     file_errors: list[dict] = []
     for name in paths:
@@ -87,8 +101,8 @@ def read_files(
             entry["metadata"] = {"size_bytes": stat.st_size, "modified_time": stat.st_mtime}
         if name in ranges:
             r = ranges[name]
-            start = int(r.start)
-            end = int(r.end)
+            start = int(r.start_line)
+            end = int(r.end_line)
             if start < 1 or end < start:
                 raise ValueError("line ranges require 1 <= start <= end")
             content = "\n".join(all_lines[start - 1:end])
@@ -104,7 +118,7 @@ def read_files(
 def register(mcp):
     return mcp.tool(description=describe(
         "Read UTF-8 workspace files (max 2 MiB each), optionally by 1-based line range. "
-        "line_ranges is a list of {path, start, end} objects; files without a range are read in full. "
+        "line_ranges is a list of {path, start_line, end_line} objects, for example [{path: 'src/app.py', start_line: 4, end_line: 6}]; legacy start/end keys are accepted. Files without a range are read in full. "
         "Missing, unreadable, or binary (non-UTF-8) files are returned in errors (with error_code) "
         "alongside successful reads in files. "
         "Response includes total_lines and, when a range is applied, the applied start and end. "

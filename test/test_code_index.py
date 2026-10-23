@@ -39,8 +39,8 @@ class CodeIndexTests(unittest.TestCase):
         self.assertEqual(code_index.index_codebase()["removed"], 1)
 
     def test_input_validation_and_isolation(self):
-        self.assertEqual(code_index.code_navigator("search_code", query=" ")["error"], "missing_parameter")
-        self.assertEqual(code_index.code_navigator("nope")["error"], "invalid_action")
+        self.assertEqual(code_index.code_navigator("search_code", query=" ")["error_code"], "missing_parameter")
+        self.assertEqual(code_index.code_navigator("nope")["error_code"], "invalid_action")
         other = tempfile.TemporaryDirectory()
         old = support.ROOT
         try:

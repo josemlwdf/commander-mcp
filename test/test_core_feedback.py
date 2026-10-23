@@ -114,6 +114,7 @@ class CoreFeedbackTests(unittest.TestCase):
         (self.root / "pyproject.toml").write_text(
             "[project]\nname = 'sample'\n", encoding="utf-8"
         )
+        (self.root / "test_one.py").write_text("def test_one(): pass\n", encoding="utf-8")
         process_result = {
             "stdout": "", "stderr": "", "exit_code": 0,
             "timed_out": False, "duration_ms": 1,

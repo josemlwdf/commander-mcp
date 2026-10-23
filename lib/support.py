@@ -253,17 +253,24 @@ def validate_shell_command(command: str, cwd: Path) -> None:
             validate_shell_command(m.group(1) or m.group(2), cwd)
     if _HOME_ESCAPE_RE.search(command) or re.search(r"~(?:/|\\|\b)", command):
         raise ValueError("Command references a home-directory escape outside the authorized workspace")
-    for match in re.finditer(r"(?:\d?>|>>|<)\s*([^\s;&|]+)", command):
-        target=match.group(1).strip("'\"()")
-        if target and target not in ("/dev/null","NUL"):
-            try: inside(target if Path(target).is_absolute() else cwd/target)
-            except ValueError: raise ValueError(f"Redirection target escapes authorized workspace: {target}")
     try:
         lexer = shlex.shlex(_split_unquoted_newlines(command), posix=os.name != "nt", punctuation_chars=True)
         lexer.whitespace_split = True
         lexer.commenters = ""
         tokens = list(lexer)
     except ValueError: raise ValueError("Malformed shell command")
+
+    # Check only real shell redirection operators. Quoted text such as `>` is
+    # emitted as a regular word by shlex and therefore cannot trigger this guard.
+    for index, token in enumerate(tokens):
+        if token and all(ch in _SHELL_PUNCTUATION for ch in token) and (">" in token or "<" in token):
+            if token[-1] == "&" or token in ("<<", "<<<"):
+                continue
+            target = tokens[index + 1] if index + 1 < len(tokens) else ""
+            if target and not all(ch in _SHELL_PUNCTUATION for ch in target):
+                if target not in _SAFE_DEVICES:
+                    try: inside(target if Path(target).is_absolute() else cwd / target)
+                    except ValueError: raise ValueError(f"Redirection target escapes authorized workspace: {target}")
 
     at_command = True      # next word is a command name (start, or after ; && || | ( ))
     command_name = ""

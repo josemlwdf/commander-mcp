@@ -216,6 +216,7 @@ def skills_manage(
     query: Annotated[str | None, Field(description="Search text used by the search action.")] = None,
     tags: Annotated[list[str] | None, Field(description='Optional array of tag strings stored in skill metadata when saving, for example ["python", "testing"].')] = None,
     version: Annotated[str, Field(description="Skill metadata version, defaults to 1.")] = "1",
+    confirm: Annotated[bool, Field(description="For delete: must be true to remove the skill; a backup is kept beside it.")] = False,
 ) -> dict:
     if action == "list":
         return _list_skills()
@@ -237,10 +238,17 @@ def skills_manage(
         if not confirm:
             return _error("confirmation_required", f"Call again with confirm=true to delete skill: {name}")
         try:
-            path = _skills_dir() / f"{name}.md"
+            directory = _skills_dir()
+            path = directory / f"{name}.md"
+            if not path.is_file():
+                return _error("not_found", f"Skill not found: {name}")
+            if path.is_symlink() or path.resolve().parent != directory.resolve():
+                return _error("path_escape", f"Skill path escapes the skills directory: {name}")
             backup = path.with_suffix(path.suffix + ".bak")
             if backup.exists():
                 return _error("backup_exists", f"Refusing to overwrite existing backup: {backup.name}")
+            if backup.is_symlink() or backup.resolve().parent != directory.resolve():
+                return _error("path_escape", f"Skill backup path escapes the skills directory: {name}")
             import shutil
             shutil.copy2(path, backup)
             path.unlink()
@@ -262,10 +270,10 @@ def skills_manage(
 def register(mcp):
     return mcp.tool(description=describe(
         "Manage reusable skills stored as Markdown files in the skills directory. "
-        "Actions: list returns name, description, invokable, tags and version; search filters those fields; get/export returns full Markdown; delete removes by name; "
+        "Actions: list returns name, description, invokable, tags and version; search filters those fields; get/export returns full Markdown; delete requires confirm=true, protects baseline skills, and keeps a .bak backup; "
         'save creates a skill from name, description and content (optional tags as an array of strings, for example ["python", "testing"], and version; fails with already_exists '
         "unless overwrite=true). Failures return error_code (missing_argument, invalid_name, "
         "invalid_description, content_has_frontmatter, skill_too_large, not_found, already_exists, "
-        "io_error). "
+        "io_error, confirmation_required, protected_skill, backup_exists, path_escape). "
         "When to use: Discover, load, or record skills that guide how to perform a task."
     ))(skills_manage)

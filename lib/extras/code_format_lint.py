@@ -42,9 +42,10 @@ def _tool_path(name: str, root: Path) -> str | None:
 
 def _python_tool_path(name: str, root: Path) -> str | None:
     """Prefer Python tools installed in this workspace's virtual environment."""
-    venv_dirs = (root / ".venv" / "bin", root / "venv" / "bin")
     if os.name == "nt":
-        venv_dirs += (root / ".venv" / "Scripts", root / "venv" / "Scripts")
+        venv_dirs = (root / ".venv" / "Scripts", root / "venv" / "Scripts")
+    else:
+        venv_dirs = (root / ".venv" / "bin", root / "venv" / "bin")
     for directory in venv_dirs:
         executable = directory / name
         if executable.is_file():
@@ -142,7 +143,7 @@ def code_format_lint(
             "javascript: run ESLint and jsbeautifier for .js/.mjs/.cjs files (also accepts TypeScript .ts/.tsx files for ESLint). "
             "text: successful no-op; no tools or fixes are run. "
             "Specify a language for directories or use language='auto' when a language cannot be inferred. "
-            "Python files receive automatic processing and formatting during creation; HTML files receive a syntax check."
+            "create_file preserves submitted content by default; format_content=true enables formatting and post_process_python=true enables Python processing."
         )),
     ] = "auto",
     config_file: Annotated[str | None, Field(description="Optional workspace-relative formatter/linter config file.")] = None,
@@ -151,7 +152,18 @@ def code_format_lint(
 ) -> dict:
         if not paths:
             raise ValueError("paths must contain at least one workspace path")
-        resolved = [inside(path, must_exist=True) for path in paths]
+        resolved = []
+        path_errors = []
+        for path in paths:
+            try:
+                resolved.append(inside(path, must_exist=True))
+            except FileNotFoundError:
+                path_errors.append({"path": path, "error_code": "not_found", "message": f"Workspace path not found: {path}"})
+            except ValueError:
+                path_errors.append({"path": path, "error_code": "path_escape", "message": f"Path escapes authorized workspace: {path}"})
+        if path_errors:
+            return {"supported": True, "ok": False, "error_code": "invalid_paths", "errors": path_errors,
+                    "message": "One or more requested paths could not be used."}
         if any(not path.is_file() and not path.is_dir() for path in resolved):
             raise ValueError("Every path must refer to a file or directory")
         if language not in ("auto", "python", "javascript", "text"):
@@ -297,7 +309,7 @@ def code_format_lint(
 def register(mcp):
     return mcp.tool(description=describe(
         "Lint or format Python and JavaScript/TypeScript with installed tools; JavaScript formatting uses optional jsbeautifier for .js/.mjs/.cjs files; language=text is a successful no-op. "
-        "Python files receive automatic processing and formatting during creation; HTML files receive a syntax check. "
+        "create_file preserves submitted content by default; format_content=true enables formatting and post_process_python=true enables Python processing. "
         "ok is true when all tools ran successfully (exit_code 0). "
         "tools_skipped entries include the tool name and the reason (e.g. not_installed). "
         "Report entries include error_code='tool_not_installed' when a tool binary cannot be started. "

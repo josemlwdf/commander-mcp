@@ -1,4 +1,5 @@
 import difflib
+import ast
 import re
 from pathlib import Path
 from typing import Annotated
@@ -110,6 +111,14 @@ def apply_edits(
         match_count = 0
         if pos:
             lines = before.splitlines(keepends=True)
+            has_final_line = not lines or before.endswith(("\n", "\r"))
+            line_count = max(1, len(lines) + (1 if before.endswith(("\n", "\r")) else 0))
+            if 1 <= pos.line <= len(lines):
+                line_length = len(lines[pos.line - 1].rstrip("\r\n")) + 1
+            else:
+                line_length = 1 if pos.line == len(lines) + 1 and has_final_line else 0
+            if pos.line > line_count or pos.col > line_length:
+                return _edit_error("invalid_range", edit_index, f"Position line {pos.line}, col {pos.col} is outside {name}", dry_run)
             offset = sum(map(len, lines[:max(0, int(pos.line) - 1)])) + max(0, int(pos.col) - 1)
             match = rx.search(before[offset:])
             if not match:
@@ -228,15 +237,24 @@ def apply_edits(
             raise RuntimeError(f"Write failed; all edits rolled back: {exc}") from exc
 
     response = {"edits": results, "files": files, "dry_run": dry_run}
-    if not dry_run and any(
-        Path(path).suffix.lower() == ".py"
-        and new_text != original_contents[path]
-        for path, new_text in staged_contents.items()
-    ):
+    if max_replacements is not None and not replace_all:
+        response["warning"] = "max_replacements was supplied but is ignored unless replace_all=true."
+    if any(Path(path).suffix.lower() == ".py" and _adds_import(original_contents[path], new_text)
+           for path, new_text in staged_contents.items()):
         response["dependency_hint"] = (
             "Review requirements.txt and add any new third-party dependencies introduced by these Python edits."
         )
     return response
+
+
+def _adds_import(before: str, after: str) -> bool:
+    def imports(source: str) -> set[str]:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return set()
+        return {ast.dump(node, include_attributes=False) for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))}
+    return bool(imports(after) - imports(before))
 
 
 def register(mcp):
@@ -250,6 +268,6 @@ def register(mcp):
         "Error messages include the zero-based edit index ([edit N]) for easy identification. "
         "Edit failures return error_code (invalid_regex, invalid_replacement, no_match, not_found, path_escape, not_a_file, binary_file, io_error, invalid_edit) "
         "with edit_index and message instead of raising; nothing is written. "
-        "Each edit result includes matches (count of replacements made) and its edit diff. Changed HTML files are prettified once after staging and are summarized in files with one original-to-final diff and formatter status per file; dry runs preview this without writing. Successful edits to Python files include a reminder to update requirements.txt if they introduce third-party dependencies. "
+        "Each edit result includes matches (count of replacements made) and its edit diff. Changed HTML files are prettified once after staging and are summarized in files with one original-to-final diff and formatter status per file; dry runs preview this without writing. A dependency_hint is returned only when an edit adds a Python import. "
         "Returns unified diffs. When to use: Make localized changes."
     ))(apply_edits)

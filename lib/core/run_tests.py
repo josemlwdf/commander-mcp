@@ -207,7 +207,20 @@ def run_tests(
             "message": "No Jest, Vitest, or pytest setup detected.",
             "detection_trace": detection_trace,
         }
-    target = inside(filter_path) if filter_path else None
+    if filter_path:
+        try:
+            target = inside(filter_path, must_exist=True)
+        except FileNotFoundError:
+            return {"supported": False, "error_code": "not_found",
+                    "message": f"Test filter path not found: {filter_path}", "path": filter_path}
+        except ValueError:
+            return {"supported": False, "error_code": "path_escape",
+                    "message": f"Path escapes authorized workspace: {filter_path}", "path": filter_path}
+        if not target.is_file() and not target.is_dir():
+            return {"supported": False, "error_code": "not_a_file_or_directory",
+                    "message": f"Test filter path is not a file or directory: {filter_path}", "path": filter_path}
+    else:
+        target = None
     if target is None and not _has_test_setup(root, framework):
         return {
             "supported": False,

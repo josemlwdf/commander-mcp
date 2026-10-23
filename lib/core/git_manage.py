@@ -329,7 +329,7 @@ def git_manage(
             try:
                 inside(arg)
             except ValueError:
-                raise ValueError(f"Git argument escapes workspace: {arg}")
+                return {"supported": True, "error_code": "path_escape", "message": f"Git argument escapes workspace: {arg}", "path": arg, "exit_code": 1}
 
     git = shutil.which("git")
     if not git:
@@ -344,7 +344,10 @@ def git_manage(
     if action == "init":
         if repo_path:
             # Allow init in a specific subdirectory instead of always using workspace root.
-            init_path = inside(repo_path)
+            try:
+                init_path = inside(repo_path)
+            except ValueError:
+                return {"supported": True, "error_code": "path_escape", "message": f"Repository path escapes authorized workspace: {repo_path}", "path": repo_path, "exit_code": 1}
             init_path.mkdir(parents=True, exist_ok=True)
             if not init_path.is_dir():
                 raise ValueError(f"repo_path for init must be a directory: {repo_path}")
@@ -376,8 +379,13 @@ def git_manage(
     if repo_path:
         requested_path = Path(repo_path)
         if requested_path.is_absolute():
-            raise ValueError("repo_path must be relative to the configured workspace")
-        selected_path = inside(repo_path, must_exist=True)
+            return {"supported": True, "error_code": "path_escape", "message": "repo_path must be relative to the authorized workspace", "path": repo_path, "exit_code": 1}
+        try:
+            selected_path = inside(repo_path, must_exist=True)
+        except ValueError:
+            return {"supported": True, "error_code": "path_escape", "message": f"Repository path escapes authorized workspace: {repo_path}", "path": repo_path, "exit_code": 1}
+        except FileNotFoundError:
+            return {"supported": True, "error_code": "not_found", "message": f"Repository path not found: {repo_path}", "path": repo_path, "exit_code": 1}
         relative_path = selected_path.relative_to(inside(".")).as_posix() or "."
         if _git_marker(selected_path):
             # .git confirmed — skip discovery, proceed directly to git call.
@@ -502,13 +510,9 @@ def git_manage(
         try:
             resolved.relative_to(selected_path.resolve())
         except ValueError:
-            raise ValueError(
-                f"Git path is outside selected repository: expected within '{selected_path}', resolved '{resolved}'."
-            )
+            return {"supported": True, "error_code": "path_escape", "message": f"Git path escapes selected repository: {git_args[index]}", "path": git_args[index], "exit_code": 1}
         if not resolved.exists() and not (action == "diff" and resolved.parent.exists()):
-            raise ValueError(
-                f"Git path does not exist: expected within '{selected_path}', resolved '{resolved}'."
-            )
+            return {"supported": True, "error_code": "not_found", "message": f"Git path not found: {git_args[index]}", "path": git_args[index], "exit_code": 1}
         git_args[index] = str(resolved)
     if action == "add":
         _maintain_gitignore(selected_path)
@@ -516,12 +520,11 @@ def git_manage(
         if mode == "both":
             staged = run_process([git, "diff", "--cached", *[arg for arg in git_args if arg != "--cached"]], cwd=selected_path)
             unstaged = run_process([git, "diff", *[arg for arg in git_args if arg != "--cached"]], cwd=selected_path)
-            result = {"stdout": staged.get("stdout", "") + unstaged.get("stdout", ""), "stderr": staged.get("stderr", "") + unstaged.get("stderr", ""), "exit_code": staged.get("exit_code", 1) or unstaged.get("exit_code", 1), "staged_diff": staged.get("stdout", ""), "unstaged_diff": unstaged.get("stdout", "")}
+            result = {"stdout": staged.get("stdout", "") + unstaged.get("stdout", ""), "stderr": staged.get("stderr", "") + unstaged.get("stderr", ""), "exit_code": staged.get("exit_code", 1) or unstaged.get("exit_code", 1)}
         else:
             result = run_process([git, action, *git_args], cwd=selected_path)
         result = _route_failure_to_stderr(result)
         result["mode"] = mode
-        result["raw_diff"] = result.get("stdout", "")
         return result
     result = _route_failure_to_stderr(run_process([git, action, *git_args], cwd=selected_path))
     if action == "status" and result.get("exit_code") == 0:
@@ -531,11 +534,14 @@ def git_manage(
             if len(line) >= 4:
                 entries.append({"index": line[0], "worktree": line[1], "path": line[3:], "untracked": line[:2] == "??"})
         result["working_tree"] = [item for item in entries if item["worktree"] != " " or item["untracked"]]
-        result["staged"] = [item for item in entries if item["index"] != " "]
+        result["staged"] = [item for item in entries if item["index"] not in (" ", "?")]
         result["untracked_files"] = [item["path"] for item in entries if item["untracked"]]
         result["untracked_summary"] = {"count": len(result["untracked_files"]), "files": result["untracked_files"]}
     elif action == "log" and result.get("exit_code") == 0:
-        history = run_process([git, "log", "-n", "20", "--format=%H%x09%h%x09%an%x09%aI%x09%s"], cwd=selected_path)
+        history_args = list(git_args)
+        separator = history_args.index("--") if "--" in history_args else len(history_args)
+        history_args[separator:separator] = ["--format=%H%x09%h%x09%an%x09%aI%x09%s"]
+        history = run_process([git, "log", *history_args], cwd=selected_path)
         result["recent_commits"] = [dict(zip(("hash", "short_hash", "author", "date", "subject"), line.split("\t", 4))) for line in history.get("stdout", "").splitlines()]
     return result
 

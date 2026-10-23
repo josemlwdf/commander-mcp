@@ -43,8 +43,10 @@ def find_files(
 ) -> dict:
     if not glob_pattern:
         raise ValueError("glob_pattern cannot be empty")
-    if file_type and file_type not in {"file", "directory"} and not file_type.startswith("."):
-        file_type = "." + file_type
+    if file_type not in (None, "file") and not (
+        isinstance(file_type, str) and file_type.startswith(".") and len(file_type) > 1
+    ):
+        raise ValueError("file_type must be 'file' or a dotted extension such as '.py'")
     if sort_by not in {"path", "size", "modified"}:
         raise ValueError("sort_by must be path, size, or modified")
     if min_size is not None and max_size is not None and min_size > max_size:
@@ -80,9 +82,9 @@ def find_files(
             continue
         if exclude_pattern and fnmatch.fnmatch(relative_path, exclude_pattern):
             continue
-        if file_type == "file":
+        if file_type == "file" and not path.is_file():
             continue
-        if file_type and path.suffix.lower() != file_type.lower():
+        if file_type and file_type != "file" and path.suffix.lower() != file_type.lower():
             continue
         stat = path.stat()
         if min_size is not None and stat.st_size < min_size or max_size is not None and stat.st_size > max_size:

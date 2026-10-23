@@ -175,6 +175,11 @@ def _fetch(url: str, offset: int = 0) -> dict:
         raw_text = decoded
         title = ""
     total_length = len(raw_text)
+    if offset > total_length:
+        return {"supported": False, "error_code": "invalid_range",
+                "message": f"offset {offset} exceeds extracted text length {total_length}.",
+                "url": final_url, "final_url": final_url, "total_length": total_length,
+                "offset": offset, "http_status": http_status}
     content = raw_text[offset:offset + 20000]
     has_more = (offset + 20000) < total_length
     next_offset = offset + 20000 if has_more else None
@@ -196,7 +201,11 @@ def web_fetch_docs(
     url: Annotated[str, Field(description="Public HTTP(S) URL to fetch as text; private, local, and reserved network targets are blocked.")],
     offset: Annotated[int, Field(ge=0, description="Character offset into the extracted text to start reading from; use to page through content beyond the initial 20 000-character window.")] = 0,
 ) -> dict:
-    return _fetch(url, offset=offset)
+    try:
+        return _fetch(url, offset=offset)
+    except ValueError as exc:
+        code = "ssrf_blocked" if any(term in str(exc).lower() for term in ("private", "local", "reserved")) else "invalid_url"
+        return {"supported": False, "error_code": code, "message": str(exc), "url": url}
 
 
 def register(mcp):

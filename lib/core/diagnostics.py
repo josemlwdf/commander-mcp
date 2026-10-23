@@ -32,7 +32,14 @@ def code_get_diagnostics(
     check: Annotated[str | None, Field(description="Optional configured check to run, such as ruff, mypy, lint, typecheck, check, or validate.")] = None,
     timeout_ms: Annotated[int, Field(ge=1, le=600000, description="Diagnostic process timeout in milliseconds; defaults to 30000.")] = 30000,
 ) -> dict:
-    base = inside(path or ".", must_exist=True)
+    try:
+        base = inside(path or ".", must_exist=True)
+    except FileNotFoundError:
+        return {"supported": False, "ok": False, "error_code": "not_found",
+                "message": f"Workspace path not found: {path}", "path": path}
+    except ValueError:
+        return {"supported": False, "ok": False, "error_code": "path_escape",
+                "message": f"Path escapes authorized workspace: {path}", "path": path}
     candidates = []
     detection_trace: list[dict[str, str]] = []
     skipped: list[dict] = []
@@ -48,6 +55,7 @@ def code_get_diagnostics(
 
     pkg = base / "package.json"
     if pkg.is_file():
+        detection_trace.append({"source": "package.json", "check": "scripts", "status": "inspected"})
         try:
             data = json.loads(pkg.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
@@ -65,11 +73,13 @@ def code_get_diagnostics(
                     detection_trace.append({"source": "package.json", "check": key, "status": "configured"})
     py = base / "pyproject.toml"
     if py.is_file():
+        detection_trace.append({"source": "pyproject.toml", "check": "tools", "status": "inspected"})
         try:
             data = tomllib.loads(py.read_text(encoding="utf-8"))
         except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
             config_errors.append({"file": "pyproject.toml", "message": f"Could not parse pyproject.toml: {exc}"})
         else:
+            detection_trace.append({"source": "pyproject.toml", "check": "configuration", "status": "inspected"})
             cfg = data.get("tool", {})
             if "ruff" in cfg:
                 candidates.append(("ruff", ["ruff", "check", "."]))
@@ -79,6 +89,7 @@ def code_get_diagnostics(
                 detection_trace.append({"source": "pyproject.toml", "check": "mypy", "status": "configured"})
     mk = base / "Makefile"
     if mk.is_file():
+        detection_trace.append({"source": "Makefile", "check": "targets", "status": "inspected"})
         targets = set()
         for line in mk.read_text(encoding="utf-8").splitlines():
             if line and not line[0].isspace() and ":" in line and not line.startswith("#"):
@@ -87,6 +98,12 @@ def code_get_diagnostics(
             if t in targets:
                 candidates.append((t, ["make", t]))
                 detection_trace.append({"source": "Makefile", "check": t, "status": "configured"})
+    if check:
+        available = list(dict.fromkeys(item[0] for item in candidates))
+        selected = [candidate for candidate in candidates if candidate[0] == check]
+        if not selected:
+            return {"supported": False, "error_code": "check_not_found", "message": f"No configured diagnostic check named {check!r}.", "requested_check": check, "available_checks": available, "detection_trace": detection_trace}
+        candidates = selected
     if not candidates and config_errors:
         files = ", ".join(e["file"] for e in config_errors)
         return {
@@ -106,10 +123,6 @@ def code_get_diagnostics(
             ),
             "detection_trace": detection_trace,
         }
-    if check:
-        candidates = [candidate for candidate in candidates if candidate[0] == check]
-        if not candidates:
-            return {"supported": False, "error_code": "check_not_found", "message": f"No configured diagnostic check named {check!r}.", "detection_trace": detection_trace}
     # Try each candidate in order, skipping tools that are not installed.
     for name, cmd in candidates:
         cmd = _configured_check_command(name, cmd)

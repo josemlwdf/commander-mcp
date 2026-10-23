@@ -12,7 +12,7 @@ def index_codebase(exclude_dirs: list[str] | None = None) -> dict:
     try:
         return code_index.index_codebase(exclusions=exclude_dirs)
     except code_index.IndexErrorBase as exc:
-        return {"error": "index_unavailable", "message": str(exc)}
+        return {"error_code": "index_unavailable", "message": str(exc)}
 
 
 def code_navigator(
@@ -26,9 +26,9 @@ def code_navigator(
     try:
         return code_index.code_navigator(action, query, symbol, file_path, limit)
     except code_index.IndexErrorBase as exc:
-        return {"error": "index_unavailable", "message": str(exc)}
+        return {"error_code": "index_unavailable", "message": str(exc)}
     except (ValueError, TypeError) as exc:
-        return {"error": "invalid_input", "message": str(exc)}
+        return {"error_code": "invalid_input", "message": str(exc)}
 
 
 def register(mcp):

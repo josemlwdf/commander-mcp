@@ -40,8 +40,8 @@ class BuildProjectTests(unittest.TestCase):
         self.assertEqual(result["raw_output"], output["stdout"] + output["stderr"])
 
     def test_path_confinement(self):
-        with self.assertRaises(ValueError):
-            build_project.build_project(path="../outside")
+        result = build_project.build_project(path="../outside")
+        self.assertEqual(result["error_code"], "path_escape")
 
     def test_missing_node_package_manager_is_reported(self):
         project = self.root / "app"

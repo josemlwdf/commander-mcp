@@ -105,8 +105,8 @@ while True:
         self.assertFalse(result["supported"])
 
     def test_web_fetch_blocks_local_network(self):
-        with self.assertRaises(ValueError):
-            self.tools.tools["web_fetch_docs"](url="http://127.0.0.1/")
+        result = self.tools.tools["web_fetch_docs"](url="http://127.0.0.1/")
+        self.assertEqual(result["error_code"], "ssrf_blocked")
 
     def test_web_fetch_extracts_html_and_omits_scripts(self):
         with patch.object(web_fetch, "_request", return_value=(
@@ -195,8 +195,9 @@ while True:
     def test_format_lint_requires_paths_and_confines_them(self):
         with self.assertRaises(ValueError):
             self.tools.tools["code_format_lint"]([])
-        with self.assertRaises(ValueError):
-            self.tools.tools["code_format_lint"](["/etc/passwd"])
+        result = self.tools.tools["code_format_lint"](["/etc/passwd", "missing.py"])
+        self.assertTrue(result["supported"])
+        self.assertEqual([error["error_code"] for error in result["errors"]], ["path_escape", "not_found"])
 
     def test_format_lint_text_is_noop_even_with_fix(self):
         import tempfile as _tempfile
